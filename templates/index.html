@@ -1,0 +1,1080 @@
+<!DOCTYPE html>
+<html lang="es" data-bs-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Polymarket Bot</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet" />
+  <style>
+    :root {
+      --accent: #7c3aed;
+      --accent-light: #a78bfa;
+      --surface: #111827;
+      --card: #1f2937;
+      --card-border: #374151;
+      --green: #22c55e;
+      --red: #ef4444;
+      --yellow: #eab308;
+    }
+
+    body {
+      background: var(--surface);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      font-size: 0.875rem;
+    }
+
+    /* ── Navbar ── */
+    .navbar-custom {
+      background: #0f172a;
+      border-bottom: 1px solid var(--card-border);
+    }
+    .navbar-brand span {
+      color: var(--accent-light);
+      font-weight: 700;
+      font-size: 1.1rem;
+      letter-spacing: -0.5px;
+    }
+
+    /* ── Cards ── */
+    .card {
+      background: var(--card);
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+    }
+    .card-header {
+      background: transparent;
+      border-bottom: 1px solid var(--card-border);
+      font-weight: 600;
+      letter-spacing: 0.3px;
+    }
+
+    /* ── Botones ── */
+    .btn-accent {
+      background: var(--accent);
+      border: none;
+      color: #fff;
+    }
+    .btn-accent:hover { background: #6d28d9; color: #fff; }
+    .btn-accent:disabled { background: #4c1d95; opacity: 0.6; }
+
+    /* ── Status badge ── */
+    .bot-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 12px;
+      border-radius: 9999px;
+      font-size: 0.78rem;
+      font-weight: 600;
+    }
+    .bot-badge.running  { background: rgba(34,197,94,.15);  color: var(--green);  }
+    .bot-badge.stopped  { background: rgba(239,68,68,.12);  color: var(--red);    }
+    .bot-badge.paused   { background: rgba(234,179,8,.15);  color: var(--yellow); }
+    .bot-badge .dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+    .bot-badge.running .dot { animation: pulse 1.2s infinite; }
+    @keyframes pulse {
+      0%,100% { opacity: 1; }
+      50%      { opacity: 0.3; }
+    }
+
+    /* ── Tabla ── */
+    .table { color: #e5e7eb; }
+    .table > thead > tr > th {
+      background: #111827;
+      color: #9ca3af;
+      font-weight: 600;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      border-color: var(--card-border);
+      white-space: nowrap;
+    }
+    .table > tbody > tr > td {
+      border-color: #283040;
+      vertical-align: middle;
+    }
+    .table > tbody > tr:hover > td { background: rgba(124,58,237,.07); }
+
+    .pnl-positive { color: var(--green); font-weight: 600; }
+    .pnl-negative { color: var(--red);   font-weight: 600; }
+    .pnl-neutral  { color: #9ca3af; }
+
+    .outcome-badge {
+      display: inline-block;
+      padding: 1px 8px;
+      border-radius: 4px;
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+    }
+    .outcome-yes { background: rgba(34,197,94,.18); color: var(--green); }
+    .outcome-no  { background: rgba(239,68,68,.18);  color: var(--red);   }
+
+    .market-title {
+      max-width: 280px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      display: block;
+    }
+
+    /* progress hacia objetivo */
+    .progress-target {
+      height: 3px;
+      border-radius: 2px;
+      background: #374151;
+      margin-top: 3px;
+    }
+    .progress-target .bar {
+      height: 100%;
+      border-radius: 2px;
+      background: var(--accent-light);
+      transition: width .4s ease;
+    }
+
+    /* ── Target input ── */
+    .target-input {
+      width: 80px;
+      background: #111827;
+      border: 1px solid var(--card-border);
+      border-radius: 6px;
+      color: #e5e7eb;
+      padding: 3px 8px;
+      font-size: 0.82rem;
+      text-align: right;
+    }
+    .target-input:focus {
+      outline: none;
+      border-color: var(--accent-light);
+      box-shadow: 0 0 0 2px rgba(167,139,250,.25);
+    }
+    .target-saved { border-color: var(--green) !important; }
+    .target-error { border-color: var(--red)   !important; }
+
+    /* ── Log panel ── */
+    #logPanel {
+      background: #0b1120;
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      height: 180px;
+      overflow-y: auto;
+      font-family: 'Consolas', 'Cascadia Code', monospace;
+      font-size: 0.75rem;
+      padding: 8px 12px;
+      color: #94a3b8;
+    }
+    #logPanel .log-entry { margin: 0; line-height: 1.55; }
+    #logPanel .log-sell  { color: var(--green); }
+    #logPanel .log-err   { color: var(--red);   }
+    #logPanel .log-info  { color: #60a5fa; }
+
+    /* ── Misc ── */
+    .sold-row td { opacity: 0.45; }
+    .empty-state  { color: #6b7280; text-align: center; padding: 40px 0; }
+    .spinner-mini { width: 14px; height: 14px; }
+
+    /* ── Copy Trading ── */
+    .copy-trade-log {
+      background: #0b1120;
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      height: 160px;
+      overflow-y: auto;
+      padding: 8px 12px;
+      font-family: 'Consolas', 'Cascadia Code', monospace;
+      font-size: 0.75rem;
+    }
+    .ct-executed { color: var(--green); }
+    .ct-skipped  { color: var(--yellow); }
+    .ct-failed   { color: var(--red); }
+    .ct-neutral  { color: #94a3b8; }
+    .profile-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 4px;
+      border-bottom: 1px solid #283040;
+    }
+    .profile-row:last-child { border-bottom: none; }
+  </style>
+</head>
+<body>
+
+<!-- ── Navbar ─────────────────────────────────────────────────────────────── -->
+<nav class="navbar navbar-custom px-3 py-2">
+  <div class="d-flex align-items-center gap-3">
+    <span class="navbar-brand mb-0">
+      <i class="bi bi-graph-up-arrow me-1" style="color:var(--accent-light)"></i>
+      <span>Polymarket Bot</span>
+    </span>
+    <span id="botStatusBadge" class="bot-badge stopped">
+      <span class="dot"></span> Detenido
+    </span>
+  </div>
+  <div class="d-flex align-items-center gap-2 ms-auto">
+    <span id="lastUpdateLabel" class="text-secondary" style="font-size:.75rem"></span>
+    <button class="btn btn-sm btn-outline-secondary" id="refreshBtn" title="Actualizar posiciones">
+      <i class="bi bi-arrow-clockwise"></i>
+    </button>
+    <button class="btn btn-sm btn-outline-secondary" data-bs-toggle="collapse" data-bs-target="#configPanel" title="Configuración">
+      <i class="bi bi-gear"></i>
+    </button>
+  </div>
+</nav>
+
+<!-- ── Config panel (colapsable) ─────────────────────────────────────────── -->
+<div class="collapse" id="configPanel">
+  <div class="container-fluid p-3">
+    <div class="card">
+      <div class="card-header d-flex align-items-center gap-2">
+        <i class="bi bi-shield-lock text-warning"></i>
+        Credenciales — guardadas localmente en <code>config.json</code>
+      </div>
+      <div class="card-body">
+        <form id="configForm" class="row g-3">
+          <div class="col-md-6">
+            <label class="form-label text-secondary">Clave privada (0x…)</label>
+            <input type="password" id="inputPK" class="form-control form-control-sm bg-dark text-light border-secondary"
+              placeholder="0x..." autocomplete="off" />
+            <div class="form-text text-warning">
+              <i class="bi bi-exclamation-triangle-fill"></i>
+              Nunca compartas tu clave privada. Se guarda sin cifrar.
+            </div>
+          </div>
+          <div class="col-md-4">
+            <label class="form-label text-secondary">Dirección de wallet (0x…)</label>
+            <input type="text" id="inputAddress" class="form-control form-control-sm bg-dark text-light border-secondary"
+              placeholder="0x..." autocomplete="off" />
+          </div>
+          <div class="col-md-2 d-flex align-items-end">
+            <button type="submit" class="btn btn-accent btn-sm w-100">
+              <i class="bi bi-floppy"></i> Guardar
+            </button>
+          </div>
+          <div id="configMsg" class="col-12"></div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Main ───────────────────────────────────────────────────────────────── -->
+<div class="container-fluid p-3">
+
+  <!-- Bot controls -->
+  <div class="d-flex align-items-center gap-2 mb-3">
+    <button id="startBotBtn" class="btn btn-sm btn-accent">
+      <i class="bi bi-play-fill"></i> Iniciar bot
+    </button>
+    <button id="stopBotBtn" class="btn btn-sm btn-outline-danger" disabled>
+      <i class="bi bi-stop-fill"></i> Detener
+    </button>
+    <span class="text-secondary ms-2" style="font-size:.75rem">
+      El bot revisa posiciones cada 1 s y vende automáticamente al alcanzar el objetivo.
+    </span>
+  </div>
+
+  <!-- Positions card -->
+  <div class="card mb-3">
+    <div class="card-header d-flex align-items-center gap-2">
+      <i class="bi bi-wallet2 text-primary"></i>
+      Posiciones abiertas
+      <span id="posCount" class="badge bg-secondary ms-1">0</span>
+    </div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-sm mb-0">
+          <thead>
+            <tr>
+              <th>Mercado</th>
+              <th>Resultado</th>
+              <th class="text-end">Cantidad</th>
+              <th class="text-end">Precio compra</th>
+              <th class="text-end">Precio actual</th>
+              <th class="text-end">Valor (USDC)</th>
+              <th class="text-end">Beneficio neto</th>
+              <th class="text-end">P&amp;L %</th>
+              <th class="text-center">Objetivo %</th>
+              <th class="text-center">Acción</th>
+            </tr>
+          </thead>
+          <tbody id="positionsBody">
+            <tr>
+              <td colspan="9" class="empty-state">
+                <i class="bi bi-inbox fs-4 d-block mb-2"></i>
+                Sin posiciones — configura tus credenciales y pulsa Actualizar
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Log panel -->
+  <div class="card mb-3">
+    <div class="card-header d-flex align-items-center justify-content-between">
+      <span><i class="bi bi-terminal text-secondary me-1"></i>Registro de actividad</span>
+      <button class="btn btn-sm btn-outline-secondary py-0" id="clearLogsBtn">
+        <i class="bi bi-trash"></i>
+      </button>
+    </div>
+    <div class="card-body p-2">
+      <div id="logPanel"></div>
+    </div>
+  </div>
+
+  <!-- ── Copy Trading ─────────────────────────────────────────────────────── -->
+  <div class="card">
+    <div class="card-header d-flex align-items-center gap-2 flex-wrap">
+      <i class="bi bi-people-fill" style="color:var(--accent-light)"></i>
+      <span style="font-weight:700">Copy Trading</span>
+      <span id="copyBotBadge" class="bot-badge stopped">
+        <span class="dot"></span> Detenido
+      </span>
+      <div class="ms-auto d-flex gap-2">
+        <button id="approveUsdcBtn" class="btn btn-sm btn-outline-warning" title="Aprobar USDC para Polymarket">
+          <i class="bi bi-shield-check"></i> Aprobar USDC
+        </button>
+        <button id="startCopyBtn" class="btn btn-sm btn-accent">
+          <i class="bi bi-play-fill"></i> Iniciar
+        </button>
+        <button id="stopCopyBtn" class="btn btn-sm btn-outline-danger" disabled>
+          <i class="bi bi-stop-fill"></i> Detener
+        </button>
+        <button class="btn btn-sm btn-outline-secondary" data-bs-toggle="collapse" data-bs-target="#copySettingsPanel" title="Configuración">
+          <i class="bi bi-sliders"></i>
+        </button>
+      </div>
+    </div>
+
+    <!-- Settings (collapsible) -->
+    <div class="collapse" id="copySettingsPanel">
+      <div class="card-body border-bottom" style="border-color:var(--card-border)!important">
+        <div class="row g-3 align-items-end">
+          <div class="col-md-3">
+            <label class="form-label text-secondary small mb-1">Modo</label>
+            <select id="copyMode" class="form-select form-select-sm bg-dark text-light border-secondary">
+              <option value="proportional">Proporcional a su cartera</option>
+              <option value="fixed">Cantidad fija por trade</option>
+            </select>
+          </div>
+          <div class="col-md-2" id="fixedAmountCol" style="display:none">
+            <label class="form-label text-secondary small mb-1">Cantidad fija ($)</label>
+            <input type="number" id="fixedAmount" min="1" step="0.5"
+              class="form-control form-control-sm bg-dark text-light border-secondary" value="5" />
+          </div>
+          <div class="col-md-2">
+            <label class="form-label text-secondary small mb-1">Presupuesto diario ($)</label>
+            <input type="number" id="dailyBudget" min="1" step="1"
+              class="form-control form-control-sm bg-dark text-light border-secondary" value="50" />
+          </div>
+          <div class="col-md-2">
+            <button class="btn btn-sm btn-accent w-100" onclick="saveCopySettings()">
+              <i class="bi bi-floppy"></i> Guardar
+            </button>
+          </div>
+          <div class="col-md-3" id="settingsSaveMsg"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Budget bar -->
+    <div class="card-body py-2 border-bottom" style="border-color:var(--card-border)!important">
+      <div class="d-flex justify-content-between align-items-center mb-1">
+        <span class="text-secondary small">Presupuesto hoy</span>
+        <span class="small">
+          <span id="spentToday" class="text-light fw-bold">$0.00</span>
+          <span class="text-secondary"> gastado · </span>
+          <span id="remainingBudget" class="text-success fw-bold">$50.00</span>
+          <span class="text-secondary"> restante de </span>
+          <span id="dailyBudgetDisplay" class="text-secondary">$50.00</span>
+        </span>
+      </div>
+      <div class="progress" style="height:4px; background:#374151; border-radius:2px">
+        <div id="budgetBar" class="progress-bar" style="width:0%; background:var(--accent); border-radius:2px; transition:width .4s ease"></div>
+      </div>
+    </div>
+
+    <!-- Profiles list -->
+    <div class="card-body py-2 border-bottom" style="border-color:var(--card-border)!important">
+      <div class="d-flex align-items-center gap-2 mb-2">
+        <span class="text-secondary small fw-bold" style="letter-spacing:.5px">PERFILES SEGUIDOS</span>
+        <button class="btn btn-sm btn-outline-secondary py-0 px-2" id="addProfileBtn">
+          <i class="bi bi-plus-circle me-1"></i>Añadir perfil
+        </button>
+      </div>
+      <div id="profilesList">
+        <div class="text-secondary small text-center py-2">Ningún perfil añadido aún</div>
+      </div>
+    </div>
+
+    <!-- Copy trades log -->
+    <div class="card-body p-2">
+      <div class="d-flex align-items-center justify-content-between mb-1 px-1">
+        <span class="text-secondary small fw-bold" style="letter-spacing:.5px">TRADES COPIADOS</span>
+        <button class="btn btn-sm btn-outline-secondary py-0 px-2" id="clearCopyBtn">
+          <i class="bi bi-trash"></i>
+        </button>
+      </div>
+      <div id="copyTradesLog" class="copy-trade-log">
+        <p class="ct-neutral m-0">Sin actividad aún…</p>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- ── Add Profile Modal ─────────────────────────────────────────────────── -->
+<div class="modal fade" id="addProfileModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content" style="background:var(--card); border-color:var(--card-border)">
+      <div class="modal-header border-secondary">
+        <h6 class="modal-title">
+          <i class="bi bi-person-plus-fill me-2" style="color:var(--accent-light)"></i>
+          Añadir perfil a seguir
+        </h6>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <label class="form-label text-secondary small">URL del perfil de Polymarket</label>
+        <input type="text" id="profileUrlInput"
+          class="form-control form-control-sm bg-dark text-light border-secondary"
+          placeholder="https://polymarket.com/@username" />
+        <div class="form-text text-secondary">
+          Ejemplo: <code>https://polymarket.com/@rn1?tab=positions</code>
+        </div>
+        <div id="addProfileMsg" class="mt-2" style="min-height:24px"></div>
+      </div>
+      <div class="modal-footer border-secondary">
+        <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+        <button type="button" class="btn btn-sm btn-accent" id="confirmAddProfileBtn">
+          <i class="bi bi-check-lg"></i> Añadir
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Confirm sell modal -->
+<div class="modal fade" id="sellModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered modal-sm">
+    <div class="modal-content" style="background:var(--card); border-color:var(--card-border)">
+      <div class="modal-header border-secondary">
+        <h6 class="modal-title"><i class="bi bi-exclamation-triangle-fill text-warning me-2"></i>Confirmar venta</h6>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body" id="sellModalBody"></div>
+      <div class="modal-footer border-secondary">
+        <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+        <button type="button" class="btn btn-sm btn-danger" id="confirmSellBtn">
+          <i class="bi bi-check-lg"></i> Vender
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+// ── Estado ─────────────────────────────────────────────────────────────────
+let positions = [];
+let pendingSell = null;
+let botPolling  = null;
+let targetSaveTimers = {};
+
+// ── Utils ──────────────────────────────────────────────────────────────────
+function fmtPct(v) {
+  const sign = v >= 0 ? '+' : '';
+  return `${sign}${v.toFixed(2)}%`;
+}
+function fmtPrice(v) { return v.toFixed(4); }
+function fmtUsdc(v)  { return '$' + v.toFixed(2); }
+
+function pnlClass(v) {
+  if (v > 0)  return 'pnl-positive';
+  if (v < 0)  return 'pnl-negative';
+  return 'pnl-neutral';
+}
+
+function outcomeHTML(outcome) {
+  const cls = /yes|si|sí/i.test(outcome) ? 'outcome-yes' : 'outcome-no';
+  return `<span class="outcome-badge ${cls}">${outcome || '–'}</span>`;
+}
+
+function shortTitle(t) {
+  return `<span class="market-title" title="${escHtml(t)}">${escHtml(t)}</span>`;
+}
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── Log panel ─────────────────────────────────────────────────────────────
+function appendLogs(entries) {
+  const panel = document.getElementById('logPanel');
+  entries.forEach(entry => {
+    const p = document.createElement('p');
+    p.className = 'log-entry' +
+      (entry.includes('🎯') || entry.includes('SELL') ? ' log-sell' : '') +
+      (entry.includes('Error')                        ? ' log-err'  : '') +
+      (entry.includes('iniciado') || entry.includes('detenido') ? ' log-info' : '');
+    p.textContent = entry;
+    panel.appendChild(p);
+  });
+  panel.scrollTop = panel.scrollHeight;
+}
+let lastLogCount = 0;
+function syncLogs(logs) {
+  if (logs.length > lastLogCount) {
+    appendLogs(logs.slice(lastLogCount));
+    lastLogCount = logs.length;
+  }
+}
+
+document.getElementById('clearLogsBtn').addEventListener('click', () => {
+  document.getElementById('logPanel').innerHTML = '';
+  lastLogCount = 0;
+});
+
+// ── Tabla de posiciones ────────────────────────────────────────────────────
+function renderPositions(list) {
+  const tbody = document.getElementById('positionsBody');
+  document.getElementById('posCount').textContent = list.length;
+
+  if (!list.length) {
+    tbody.innerHTML = `<tr><td colspan="9" class="empty-state">
+      <i class="bi bi-inbox fs-4 d-block mb-2"></i>Sin posiciones abiertas</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = list.map(p => {
+    const targetVal = p.target_pct != null ? p.target_pct : '';
+
+    // Barra de progreso hacia el objetivo
+    let progressHTML = '';
+    if (p.target_pct != null && p.target_pct > 0) {
+      const pct = Math.min(100, Math.max(0, (p.pnl_pct / p.target_pct) * 100));
+      progressHTML = `<div class="progress-target"><div class="bar" style="width:${pct.toFixed(1)}%"></div></div>`;
+    }
+
+    const sellDisabled = p.sold ? 'disabled' : '';
+    const rowClass = p.sold ? 'sold-row' : '';
+
+    let actionHTML;
+    if (p.sold) {
+      actionHTML = '<span class="badge" style="background:rgba(34,197,94,.15);color:var(--green)"><i class="bi bi-check-circle-fill"></i> Vendido</span>';
+    } else if (p.redeemable) {
+      actionHTML = `<button class="btn btn-sm btn-outline-warning py-0 px-2"
+          onclick="redeemPosition('${escHtml(p.token_id)}','${escHtml(p.title)}')">
+          <i class="bi bi-gift-fill"></i> Canjear
+        </button>`;
+    } else {
+      actionHTML = `<button class="btn btn-sm btn-outline-danger py-0 px-2 me-1" ${sellDisabled}
+           onclick="openSellModal('${escHtml(p.token_id)}','${escHtml(p.title)}',${p.size},${p.current_price},${p.cost},${p.net_profit})">
+           <i class="bi bi-cash-coin"></i> Vender
+         </button>`;
+    }
+    const hideBtn = `<button class="btn btn-sm btn-outline-secondary py-0 px-1" title="Ocultar esta posición"
+      onclick="hidePosition('${escHtml(p.token_id)}','${escHtml(p.title)}')">
+      <i class="bi bi-eye-slash"></i></button>`;
+
+    return `<tr class="${rowClass}" data-token="${escHtml(p.token_id)}">
+      <td>${shortTitle(p.title)}</td>
+      <td>${outcomeHTML(p.outcome)}</td>
+      <td class="text-end text-secondary">${p.size}</td>
+      <td class="text-end text-secondary">${fmtPrice(p.avg_price)}</td>
+      <td class="text-end">${fmtPrice(p.current_price)}</td>
+      <td class="text-end">${fmtUsdc(p.value)}</td>
+      <td class="text-end">
+        <span class="${pnlClass(p.net_profit)}" title="Ingreso neto tras comisión 2%: ${fmtUsdc(p.sell_value)} − coste ${fmtUsdc(p.cost)}">
+          ${p.net_profit >= 0 ? '+' : ''}${fmtUsdc(p.net_profit)}
+        </span>
+      </td>
+      <td class="text-end">
+        <span class="${pnlClass(p.pnl_pct)}">${fmtPct(p.pnl_pct)}</span>
+        ${progressHTML}
+      </td>
+      <td class="text-center">
+        <div class="d-flex align-items-center justify-content-center gap-1">
+          <input type="number" step="0.1" min="0" max="10000"
+            class="target-input" id="target_${escHtml(p.token_id)}"
+            value="${targetVal}" placeholder="–"
+            onchange="scheduleTargetSave('${escHtml(p.token_id)}')" />
+          <span class="text-secondary">%</span>
+        </div>
+      </td>
+      <td class="text-center">${actionHTML} ${hideBtn}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ── Guardar objetivo con debounce ─────────────────────────────────────────
+function scheduleTargetSave(tokenId) {
+  clearTimeout(targetSaveTimers[tokenId]);
+  targetSaveTimers[tokenId] = setTimeout(() => saveTarget(tokenId), 600);
+}
+
+async function saveTarget(tokenId) {
+  const input = document.getElementById('target_' + tokenId);
+  if (!input) return;
+  const val = input.value.trim();
+  try {
+    const r = await fetch('/api/target', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ token_id: tokenId, target_pct: val === '' ? null : parseFloat(val) })
+    });
+    const d = await r.json();
+    input.classList.toggle('target-saved', d.ok);
+    input.classList.remove('target-error');
+    setTimeout(() => input.classList.remove('target-saved'), 1500);
+  } catch {
+    input.classList.add('target-error');
+  }
+}
+
+// ── Cargar posiciones ─────────────────────────────────────────────────────
+async function loadPositions() {
+  const btn = document.getElementById('refreshBtn');
+  const icon = btn.querySelector('i');
+  icon.classList.add('spin');
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/positions');
+    const d = await r.json();
+    positions = d.positions || [];
+    renderPositions(positions);
+    if (d.last_update) {
+      const t = new Date(d.last_update);
+      document.getElementById('lastUpdateLabel').textContent =
+        'Actualizado ' + t.toLocaleTimeString('es');
+    }
+  } catch (e) {
+    console.error(e);
+  } finally {
+    icon.classList.remove('spin');
+    btn.disabled = false;
+  }
+}
+
+// ── Bot controls ───────────────────────────────────────────────────────────
+async function updateBotStatus() {
+  try {
+    const r = await fetch('/api/bot/status');
+    const d = await r.json();
+    syncLogs(d.logs || []);
+
+    const badge = document.getElementById('botStatusBadge');
+    const startBtn = document.getElementById('startBotBtn');
+    const stopBtn  = document.getElementById('stopBotBtn');
+
+    if (d.running) {
+      badge.className = 'bot-badge running';
+      badge.innerHTML = '<span class="dot"></span> En marcha';
+      startBtn.disabled = true;
+      stopBtn.disabled  = false;
+    } else {
+      badge.className = 'bot-badge stopped';
+      badge.innerHTML = '<span class="dot"></span> Detenido';
+      startBtn.disabled = false;
+      stopBtn.disabled  = true;
+    }
+  } catch { /* silenciar errores de red */ }
+}
+
+document.getElementById('startBotBtn').addEventListener('click', async () => {
+  await fetch('/api/bot/start', { method: 'POST' });
+  updateBotStatus();
+});
+document.getElementById('stopBotBtn').addEventListener('click', async () => {
+  await fetch('/api/bot/stop', { method: 'POST' });
+  updateBotStatus();
+});
+document.getElementById('refreshBtn').addEventListener('click', loadPositions);
+
+// Polling de estado del bot cada 5 s
+setInterval(updateBotStatus, 5000);
+
+// Polling de posiciones cada 5 s (el bot las actualiza cada 1 s)
+setInterval(loadPositions, 5000);
+
+// ── Configuración ──────────────────────────────────────────────────────────
+async function loadConfig() {
+  const r = await fetch('/api/config');
+  const d = await r.json();
+  const creds = d.credentials || {};
+  if (d.has_private_key) {
+    document.getElementById('inputPK').placeholder = '(guardada — dejar en blanco para mantener)';
+  }
+  document.getElementById('inputAddress').value = creds.address || '';
+}
+
+document.getElementById('configForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const pk   = document.getElementById('inputPK').value.trim();
+  const addr = document.getElementById('inputAddress').value.trim();
+  const creds = { address: addr };
+  if (pk) creds.private_key = pk;
+
+  const r = await fetch('/api/config', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ credentials: creds })
+  });
+  const d = await r.json();
+  const msg = document.getElementById('configMsg');
+  if (d.ok) {
+    msg.innerHTML = d.client_ready
+      ? '<span class="text-success"><i class="bi bi-check-circle-fill"></i> Guardado — cliente CLOB listo</span>'
+      : '<span class="text-warning"><i class="bi bi-exclamation-triangle-fill"></i> Guardado — cliente CLOB no inicializado (revisa la clave)</span>';
+    document.getElementById('inputPK').value = '';
+    document.getElementById('inputPK').placeholder = '(guardada — dejar en blanco para mantener)';
+    // Cerrar config panel tras guardar
+    setTimeout(() => {
+      bootstrap.Collapse.getOrCreateInstance(document.getElementById('configPanel')).hide();
+    }, 1200);
+  } else {
+    msg.innerHTML = '<span class="text-danger">Error al guardar</span>';
+  }
+});
+
+// ── Ocultar posición ──────────────────────────────────────────────────────
+async function hidePosition(tokenId, title) {
+  if (!confirm(`¿Ocultar "${title.substring(0,60)}"?\nPuedes mostrarla de nuevo refrescando con Shift+click.`)) return;
+  await fetch('/api/hide', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ token_id: tokenId, hide: true })
+  });
+  appendLogs([`[ocultar] "${title.substring(0,50)}" ocultada`]);
+  loadPositions();
+}
+
+// ── Modal de venta manual ─────────────────────────────────────────────────
+async function redeemPosition(tokenId, title) {
+  if (!confirm(`¿Canjear "${title.substring(0,60)}"?\nSe enviará una transacción on-chain.`)) return;
+  appendLogs([`[redeem] Canjeando: ${title.substring(0,50)}…`]);
+  try {
+    const r = await fetch('/api/redeem', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ token_id: tokenId, title })
+    });
+    const d = await r.json();
+    if (d.ok) {
+      appendLogs([`[redeem] ✓ Canjeado correctamente (tx: ${d.tx ? d.tx.substring(0,16) + '…' : 'ok'})`]);
+      setTimeout(loadPositions, 3000);
+    } else {
+      appendLogs([`[redeem] Error: ${d.error || 'desconocido'}`]);
+    }
+  } catch (err) {
+    appendLogs([`[redeem] Error de red: ${err}`]);
+  }
+}
+
+const sellModal = new bootstrap.Modal(document.getElementById('sellModal'));
+function openSellModal(tokenId, title, size, price, cost, netProfit) {
+  pendingSell = { tokenId, size, price };
+  const netColor = netProfit >= 0 ? 'var(--green)' : 'var(--red)';
+  const netSign  = netProfit >= 0 ? '+' : '';
+  const sellNet  = size * price * 0.98;
+  document.getElementById('sellModalBody').innerHTML = `
+    <p class="mb-1">Vas a vender:</p>
+    <p class="fw-bold text-light">${escHtml(title)}</p>
+    <table class="table table-sm table-borderless text-secondary mb-0">
+      <tr><td>Cantidad</td><td class="text-end text-light">${size}</td></tr>
+      <tr><td>Precio estimado</td><td class="text-end text-light">${fmtPrice(price)}</td></tr>
+      <tr><td>Ingreso bruto</td><td class="text-end text-light">${fmtUsdc(size * price)}</td></tr>
+      <tr><td>Comisión (2%)</td><td class="text-end text-warning">−${fmtUsdc(size * price * 0.02)}</td></tr>
+      <tr><td>Coste de compra</td><td class="text-end text-secondary">−${fmtUsdc(cost ?? 0)}</td></tr>
+      <tr style="border-top:1px solid #374151"><td><strong>Beneficio neto</strong></td>
+        <td class="text-end fw-bold" style="color:${netColor}">${netSign}${fmtUsdc(netProfit ?? sellNet - (cost ?? 0))}</td></tr>
+    </table>`;
+  sellModal.show();
+}
+
+document.getElementById('confirmSellBtn').addEventListener('click', async () => {
+  if (!pendingSell) return;
+  sellModal.hide();
+  const { tokenId, size, price } = pendingSell;
+  pendingSell = null;
+  try {
+    const r = await fetch('/api/sell', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ token_id: tokenId, size, price })
+    });
+    const d = await r.json();
+    if (d.ok) {
+      appendLogs([`[manual] Orden de venta enviada correctamente`]);
+      setTimeout(loadPositions, 2000);
+    } else {
+      appendLogs([`[manual] Error al vender: ${d.error || 'desconocido'}`]);
+    }
+  } catch (err) {
+    appendLogs([`[manual] Error de red: ${err}`]);
+  }
+});
+
+// ── CSS spin ───────────────────────────────────────────────────────────────
+const style = document.createElement('style');
+style.textContent = `
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .spin { display:inline-block; animation: spin .7s linear infinite; }
+`;
+document.head.appendChild(style);
+
+// ── Init ───────────────────────────────────────────────────────────────────
+(async function init() {
+  await loadConfig();
+  await updateBotStatus();
+  await loadPositions();
+  await loadCopySettings();
+  await loadCopyProfiles();
+  await updateCopyStatus();
+})();
+
+// ── Copy Trading ────────────────────────────────────────────────────────────
+const addProfileModal = new bootstrap.Modal(document.getElementById('addProfileModal'));
+
+document.getElementById('addProfileBtn').addEventListener('click', () => {
+  document.getElementById('profileUrlInput').value = '';
+  document.getElementById('addProfileMsg').innerHTML = '';
+  document.getElementById('confirmAddProfileBtn').disabled = false;
+  addProfileModal.show();
+  setTimeout(() => document.getElementById('profileUrlInput').focus(), 400);
+});
+
+document.getElementById('profileUrlInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') addProfile();
+});
+
+document.getElementById('confirmAddProfileBtn').addEventListener('click', addProfile);
+
+async function addProfile() {
+  const url = document.getElementById('profileUrlInput').value.trim();
+  if (!url) return;
+
+  const btn = document.getElementById('confirmAddProfileBtn');
+  const msg = document.getElementById('addProfileMsg');
+  btn.disabled = true;
+  msg.innerHTML = '<span class="text-secondary"><span class="spinner-border spinner-border-sm me-1"></span>Resolviendo perfil…</span>';
+
+  try {
+    const r = await fetch('/api/copy/profiles', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url })
+    });
+    const d = await r.json();
+    if (d.ok) {
+      msg.innerHTML = `<span class="text-success"><i class="bi bi-check-circle-fill me-1"></i>@${escHtml(d.username)} añadido</span>`;
+      setTimeout(() => { addProfileModal.hide(); loadCopyProfiles(); }, 900);
+    } else {
+      msg.innerHTML = `<span class="text-danger"><i class="bi bi-x-circle-fill me-1"></i>${escHtml(d.error)}</span>`;
+      btn.disabled = false;
+    }
+  } catch (e) {
+    msg.innerHTML = `<span class="text-danger">Error de red: ${e}</span>`;
+    btn.disabled = false;
+  }
+}
+
+async function removeProfile(address) {
+  if (!confirm('¿Dejar de seguir este perfil?')) return;
+  await fetch(`/api/copy/profiles/${encodeURIComponent(address)}`, { method: 'DELETE' });
+  loadCopyProfiles();
+}
+
+async function loadCopyProfiles() {
+  try {
+    const r = await fetch('/api/copy/profiles');
+    const profiles = await r.json();
+    renderCopyProfiles(profiles);
+  } catch {}
+}
+
+function renderCopyProfiles(profiles) {
+  const el = document.getElementById('profilesList');
+  if (!profiles.length) {
+    el.innerHTML = '<div class="text-secondary small text-center py-2">Ningún perfil añadido aún</div>';
+    return;
+  }
+  el.innerHTML = profiles.map(p => `
+    <div class="profile-row">
+      <i class="bi bi-person-circle text-secondary"></i>
+      <span class="text-light fw-bold">@${escHtml(p.username)}</span>
+      <span class="text-secondary small">${p.address.slice(0,8)}…${p.address.slice(-4)}</span>
+      ${p.portfolio_value > 0
+        ? `<span class="text-secondary small">· cartera ~$${p.portfolio_value.toFixed(0)}</span>`
+        : ''}
+      <button class="btn btn-sm btn-outline-danger py-0 px-1 ms-auto"
+        onclick="removeProfile('${escHtml(p.address)}')">
+        <i class="bi bi-x-lg"></i>
+      </button>
+    </div>`).join('');
+}
+
+async function loadCopySettings() {
+  try {
+    const r = await fetch('/api/copy/settings');
+    const s = await r.json();
+    document.getElementById('copyMode').value = s.mode || 'proportional';
+    document.getElementById('fixedAmount').value = s.fixed_amount || 5;
+    document.getElementById('dailyBudget').value = s.daily_budget || 50;
+    document.getElementById('fixedAmountCol').style.display =
+      s.mode === 'fixed' ? '' : 'none';
+    updateBudgetDisplay(s.spent_today || 0, s.daily_budget || 50, s.remaining || 50);
+  } catch {}
+}
+
+document.getElementById('copyMode').addEventListener('change', function () {
+  document.getElementById('fixedAmountCol').style.display =
+    this.value === 'fixed' ? '' : 'none';
+});
+
+async function saveCopySettings() {
+  const mode        = document.getElementById('copyMode').value;
+  const fixedAmount = parseFloat(document.getElementById('fixedAmount').value);
+  const dailyBudget = parseFloat(document.getElementById('dailyBudget').value);
+  const msg         = document.getElementById('settingsSaveMsg');
+  try {
+    const r = await fetch('/api/copy/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode, fixed_amount: fixedAmount, daily_budget: dailyBudget })
+    });
+    const d = await r.json();
+    if (d.ok) {
+      msg.innerHTML = '<span class="text-success small"><i class="bi bi-check-circle-fill me-1"></i>Guardado</span>';
+      updateBudgetDisplay(0, dailyBudget, d.remaining);
+      setTimeout(() => msg.innerHTML = '', 2000);
+    } else {
+      msg.innerHTML = `<span class="text-danger small">${escHtml(d.error)}</span>`;
+    }
+  } catch (e) {
+    msg.innerHTML = `<span class="text-danger small">Error: ${e}</span>`;
+  }
+}
+
+function updateBudgetDisplay(spent, daily, remaining) {
+  document.getElementById('spentToday').textContent    = `$${spent.toFixed(2)}`;
+  document.getElementById('dailyBudgetDisplay').textContent = `$${daily.toFixed(2)}`;
+  document.getElementById('remainingBudget').textContent   = `$${remaining.toFixed(2)}`;
+  const pct = daily > 0 ? Math.min(100, (spent / daily) * 100) : 0;
+  const bar = document.getElementById('budgetBar');
+  bar.style.width = `${pct}%`;
+  bar.style.background = pct > 80 ? 'var(--red)' : pct > 50 ? 'var(--yellow)' : 'var(--accent)';
+}
+
+async function updateCopyStatus() {
+  try {
+    const [sR, tR] = await Promise.all([
+      fetch('/api/copy/status'),
+      fetch('/api/copy/trades')
+    ]);
+    const status = await sR.json();
+    const trades = await tR.json();
+
+    const badge    = document.getElementById('copyBotBadge');
+    const startBtn = document.getElementById('startCopyBtn');
+    const stopBtn  = document.getElementById('stopCopyBtn');
+
+    const budgetExhausted = status.running && (status.remaining_budget ?? 1) < 1;
+    if (status.running && !budgetExhausted) {
+      badge.className = 'bot-badge running';
+      badge.innerHTML = '<span class="dot"></span> Activo';
+      startBtn.disabled = true;
+      stopBtn.disabled  = false;
+    } else if (budgetExhausted) {
+      badge.className = 'bot-badge paused';
+      badge.innerHTML = '<span class="dot"></span> En espera — presupuesto agotado';
+      startBtn.disabled = true;
+      stopBtn.disabled  = false;
+    } else {
+      badge.className = 'bot-badge stopped';
+      badge.innerHTML = '<span class="dot"></span> Detenido';
+      startBtn.disabled = false;
+      stopBtn.disabled  = true;
+    }
+
+    updateBudgetDisplay(status.spent_today, status.daily_budget, status.remaining_budget);
+    renderCopyTrades(trades);
+  } catch {}
+}
+
+function renderCopyTrades(trades) {
+  const el = document.getElementById('copyTradesLog');
+  if (!trades.length) {
+    el.innerHTML = '<p class="ct-neutral m-0">Sin actividad aún…</p>';
+    return;
+  }
+  el.innerHTML = trades.map(t => {
+    const cls  = t.status === 'executed' ? 'ct-executed'
+               : t.status === 'failed'   ? 'ct-failed'
+               : t.status === 'skipped'  ? 'ct-skipped'
+               : 'ct-neutral';
+    const icon = t.status === 'executed' ? 'bi-check-circle-fill'
+               : t.status === 'failed'   ? 'bi-x-circle-fill'
+               : t.status === 'skipped'  ? 'bi-skip-forward-fill'
+               : 'bi-arrow-left-right';
+    const sideColor = t.side === 'BUY' ? 'color:var(--green)' : 'color:var(--red)';
+    const amtStr = t.status === 'executed'
+      ? ` <span class="text-light">$${(t.our_amount||0).toFixed(2)}</span>` : '';
+    const reasonStr = t.reason
+      ? ` <span class="text-secondary">— ${escHtml(t.reason)}</span>` : '';
+    return `<p class="m-0 ${cls}" style="line-height:1.65">` +
+      `[${t.ts}] <i class="bi ${icon}"></i> ` +
+      `<span style="${sideColor};font-weight:600">${t.side}</span> ` +
+      `<span class="text-secondary">@${escHtml(t.profile)}</span> ` +
+      `${escHtml((t.market||'').substring(0,40))}` +
+      `${amtStr}${reasonStr}</p>`;
+  }).join('');
+  el.scrollTop = el.scrollHeight;
+}
+
+document.getElementById('approveUsdcBtn').addEventListener('click', async () => {
+  const btn = document.getElementById('approveUsdcBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Aprobando…';
+  try {
+    const r = await fetch('/api/copy/approve', { method: 'POST' });
+    const d = await r.json();
+    if (d.ok) {
+      btn.innerHTML = '<i class="bi bi-check-circle-fill me-1"></i>Aprobado';
+      btn.classList.replace('btn-outline-warning', 'btn-outline-success');
+    } else {
+      btn.innerHTML = '<i class="bi bi-x-circle-fill me-1"></i>Error';
+      btn.classList.replace('btn-outline-warning', 'btn-outline-danger');
+      btn.title = d.error;
+      btn.disabled = false;
+    }
+  } catch (e) {
+    btn.innerHTML = '<i class="bi bi-x-circle-fill"></i> Error';
+    btn.disabled = false;
+  }
+});
+
+document.getElementById('startCopyBtn').addEventListener('click', async () => {
+  await fetch('/api/copy/start', { method: 'POST' });
+  updateCopyStatus();
+});
+document.getElementById('stopCopyBtn').addEventListener('click', async () => {
+  await fetch('/api/copy/stop', { method: 'POST' });
+  updateCopyStatus();
+});
+document.getElementById('clearCopyBtn').addEventListener('click', async () => {
+  await fetch('/api/copy/trades', { method: 'DELETE' });
+  document.getElementById('copyTradesLog').innerHTML = '<p class="ct-neutral m-0">Sin actividad aún…</p>';
+});
+
+// Poll copy status every 3 s
+setInterval(updateCopyStatus, 3000);
+</script>
+</body>
+</html>
