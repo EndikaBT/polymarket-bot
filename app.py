@@ -1308,32 +1308,60 @@ def api_sell():
     return jsonify({"ok": ok, "error": msg if not ok else ""})
 
 
-@app.route("/api/session", methods=["GET"])
-def api_session():
-    balance_usdc = 0.0
+def _fetch_usdc_balance() -> float:
     try:
         from web3 import Web3
         from web3.middleware import ExtraDataToPOAMiddleware
         from eth_account import Account
         pk = state["credentials"].get("private_key", "")
-        if pk:
-            w3 = Web3(Web3.HTTPProvider("https://polygon-bor-rpc.publicnode.com"))
-            w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
-            acct = Account.from_key(pk)
-            USDC = Web3.to_checksum_address("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174")
-            abi  = [{"inputs":[{"name":"account","type":"address"}],"name":"balanceOf",
-                     "outputs":[{"name":"","type":"uint256"}],"type":"function","stateMutability":"view"}]
-            balance_usdc = w3.eth.contract(address=USDC, abi=abi)\
-                            .functions.balanceOf(acct.address).call() / 1_000_000
+        if not pk:
+            return 0.0
+        w3 = Web3(Web3.HTTPProvider("https://polygon-bor-rpc.publicnode.com"))
+        w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
+        acct = Account.from_key(pk)
+        USDC = Web3.to_checksum_address("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174")
+        abi  = [{"inputs":[{"name":"account","type":"address"}],"name":"balanceOf",
+                 "outputs":[{"name":"","type":"uint256"}],"type":"function","stateMutability":"view"}]
+        return w3.eth.contract(address=USDC, abi=abi).functions.balanceOf(acct.address).call() / 1_000_000
     except Exception:
-        pass
-    sess = state["session"]
+        return 0.0
+
+
+def _pnl_for_period(where_sql: str, params: tuple = ()) -> dict:
+    """Query closed_positions for a time window and return profit/won/lost."""
+    q = f"""
+        SELECT
+            COALESCE(SUM(profit), 0.0)                                              AS profit,
+            COALESCE(SUM(CASE WHEN profit >= 0 AND type != 'perdida' THEN 1 END), 0) AS won,
+            COALESCE(SUM(CASE WHEN profit <  0 OR  type  = 'perdida' THEN 1 END), 0) AS lost
+        FROM closed_positions
+        {('WHERE ' + where_sql) if where_sql else ''}
+    """
+    with _db_conn() as conn:
+        row = conn.execute(q, params).fetchone()
+    return {
+        "profit": round(float(row["profit"]), 2),
+        "won":    int(row["won"]),
+        "lost":   int(row["lost"]),
+    }
+
+
+@app.route("/api/session", methods=["GET"])
+def api_session():
     return jsonify({
-        "balance": round(balance_usdc, 2),
-        "profit":  sess["profit"],
-        "won":     sess["won"],
-        "lost":    sess["lost"],
-        "start":   sess["start"],
+        "balance": round(_fetch_usdc_balance(), 2),
+        **_pnl_for_period("date(ts) = date('now')"),   # daily (backward-compat field names)
+    })
+
+
+@app.route("/api/stats", methods=["GET"])
+def api_stats():
+    return jsonify({
+        "balance": round(_fetch_usdc_balance(), 2),
+        "daily":   _pnl_for_period("date(ts) = date('now')"),
+        "weekly":  _pnl_for_period("ts >= date('now', '-6 days')"),
+        "monthly": _pnl_for_period("strftime('%Y-%m', ts) = strftime('%Y-%m', 'now')"),
+        "all_time": _pnl_for_period(""),
     })
 
 
