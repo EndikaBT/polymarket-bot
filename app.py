@@ -30,6 +30,14 @@ state = {
     "sold_tokens": set(),
     "redeemed_tokens": set(),
     "hidden_tokens": set(),
+    "hidden_positions": {},  # token_id -> {title, outcome, size, avg_price, reason}
+    "closed_positions": [],  # [{title, outcome, size, avg_price, close_price, profit, type, ts}]
+    "session": {            # resets on every server restart
+        "profit": 0.0,
+        "won": 0,
+        "lost": 0,
+        "start": datetime.now().isoformat(),
+    },
     # ── Copy trading ──────────────────────────────────────────────────────────
     "copy_profiles": {},   # address -> profile dict
     "copy_trades": [],     # list of trade records (most recent first)
@@ -59,8 +67,10 @@ def load_config():
                 data = json.load(f)
             state["credentials"].update(data.get("credentials", {}))
             state["profit_targets"] = data.get("profit_targets", {})
-            state["hidden_tokens"]   = set(data.get("hidden_tokens", []))
-            state["redeemed_tokens"] = set(data.get("redeemed_tokens", []))
+            state["hidden_tokens"]    = set(data.get("hidden_tokens", []))
+            state["redeemed_tokens"]  = set(data.get("redeemed_tokens", []))
+            state["hidden_positions"] = data.get("hidden_positions", {})
+            state["closed_positions"] = data.get("closed_positions", [])
             # Copy trading
             state["copy_settings"].update(data.get("copy_settings", {}))
             for p in data.get("copy_profiles", []):
@@ -76,8 +86,10 @@ def save_config():
             {
                 "credentials": state["credentials"],
                 "profit_targets": state["profit_targets"],
-                "hidden_tokens":   list(state["hidden_tokens"]),
-                "redeemed_tokens": list(state["redeemed_tokens"]),
+                "hidden_tokens":    list(state["hidden_tokens"]),
+                "redeemed_tokens":  list(state["redeemed_tokens"]),
+                "hidden_positions": state["hidden_positions"],
+                "closed_positions": state["closed_positions"],
                 "copy_settings": state["copy_settings"],
                 "copy_profiles": list(state["copy_profiles"].values()),
                 "copy_positions": state["copy_positions"],
@@ -191,6 +203,8 @@ def enrich_positions(raw_positions: list) -> list:
         avg_price = float(raw.get("avgPrice") or raw.get("averagePrice") or 0)
         cur_price_api = float(raw.get("curPrice") or 0)
         redeemable = bool(raw.get("redeemable", False))
+        condition_id  = raw.get("conditionId", "")
+        outcome_index = int(raw.get("outcomeIndex", 0))
         title = (
             raw.get("title") or raw.get("question") or
             raw.get("slug") or (f"{token_id[:20]}…" if token_id else "Desconocido")
@@ -210,9 +224,18 @@ def enrich_positions(raw_positions: list) -> list:
 
         # Auto-hide worthless losing positions (market resolved against us)
         if current < 0.01:
+            is_new = token_id not in state["hidden_tokens"]
             state["hidden_tokens"].add(token_id)
+            state["hidden_positions"][token_id] = {
+                "title": title, "outcome": outcome,
+                "size": round(size, 4), "avg_price": round(avg_price, 4),
+                "cost": round(size * avg_price, 2), "reason": "perdida",
+            }
+            if is_new:
+                # Record the loss immediately so P&L reflects it right away
+                record_close(title, outcome, round(size, 4), round(avg_price, 4), 0.0, "perdida")
+                log(f"[bot] Apuesta perdida ocultada y contabilizada: {title[:45]}")
             save_config()
-            log(f"[bot] Apuesta perdida ocultada automáticamente: {title[:45]}")
             continue
 
         pnl_pct = ((current - avg_price) / avg_price * 100) if avg_price > 0 else 0.0
@@ -243,6 +266,8 @@ def enrich_positions(raw_positions: list) -> list:
                 "pnl_pct": round(pnl_pct, 2),
                 "target_pct": target,
                 "redeemable": redeemable,
+                "condition_id": condition_id,
+                "outcome_index": outcome_index,
                 "auto_sell_active": target is not None and not already_sold,
                 "sold": already_sold,
             }
@@ -277,10 +302,13 @@ def sell_position(token_id: str, size: float, price: float | None = None) -> tup
 
 # ─── Canje de posiciones resueltas ───────────────────────────────────────────
 
-GAMMA_HOST = "https://gamma-api.polymarket.com"
+def redeem_position(token_id: str, title: str,
+                    condition_id: str = "", outcome_index: int = -1) -> tuple[bool, str]:
+    """Redeem a resolved winning position via the CTF contract on-chain.
 
-def redeem_position(token_id: str, title: str) -> tuple[bool, str]:
-    """Redeem a resolved winning position via the CTF contract on-chain."""
+    conditionId and outcomeIndex come directly from the Data API positions
+    response — no need to query Gamma API.
+    """
     pk = state["credentials"].get("private_key", "")
     if not pk:
         return False, "No hay clave privada"
@@ -289,30 +317,26 @@ def redeem_position(token_id: str, title: str) -> tuple[bool, str]:
         from web3.middleware import ExtraDataToPOAMiddleware
         from eth_account import Account
 
-        # 1) Resolve conditionId and outcome index via Gamma API
-        resp = requests.get(
-            f"{GAMMA_HOST}/markets",
-            params={"clob_token_ids": token_id},
-            timeout=10,
-        )
-        if resp.status_code != 200 or not resp.json():
-            return False, f"Mercado no encontrado en Gamma API (HTTP {resp.status_code})"
+        # 1) If not supplied, look them up from the Data API positions
+        if not condition_id or outcome_index < 0:
+            address = state["credentials"].get("address", "").strip()
+            resp = requests.get(
+                f"{DATA_HOST}/positions",
+                params={"user": address.lower()},
+                timeout=10,
+            )
+            if resp.status_code != 200:
+                return False, f"No se pudieron obtener posiciones (HTTP {resp.status_code})"
+            for pos in (resp.json() if isinstance(resp.json(), list) else []):
+                if str(pos.get("asset") or pos.get("tokenId") or "") == str(token_id):
+                    condition_id   = pos.get("conditionId", "")
+                    outcome_index  = int(pos.get("outcomeIndex", 0))
+                    break
 
-        market = resp.json()[0]
-        condition_id: str = market.get("conditionId", "")
         if not condition_id:
-            return False, "conditionId no disponible en el mercado"
+            return False, "conditionId no disponible — mercado no encontrado en Data API"
 
-        clob_ids = market.get("clobTokenIds") or []
-        if isinstance(clob_ids, str):
-            clob_ids = json.loads(clob_ids)
-
-        try:
-            outcome_index = [str(t) for t in clob_ids].index(str(token_id))
-        except ValueError:
-            return False, "Token no encontrado en los outcomes del mercado"
-
-        index_set = 1 << outcome_index  # 1 for YES (index 0), 2 for NO (index 1)
+        index_set = 1 << outcome_index  # 1 for outcome 0 (YES), 2 for outcome 1 (NO)
 
         # 2) Call redeemPositions on the CTF contract
         w3 = Web3(Web3.HTTPProvider("https://polygon-bor-rpc.publicnode.com"))
@@ -365,6 +389,39 @@ def redeem_position(token_id: str, title: str) -> tuple[bool, str]:
         return False, str(e)
 
 
+# ─── Auto-canje ──────────────────────────────────────────────────────────────
+
+state["_redeeming"] = False  # flag para evitar redeems concurrentes
+
+def check_and_redeem():
+    """Find one redeemable position and redeem it. Skips if a redeem is already in flight.
+    Processes one at a time so nonces don't collide."""
+    if state["_redeeming"]:
+        return
+    for pos in list(state["positions"]):
+        token_id = pos.get("token_id", "")
+        if not token_id:
+            continue
+        if not pos.get("redeemable"):
+            continue
+        if token_id in state["redeemed_tokens"]:
+            continue
+        # Found one — redeem it
+        state["_redeeming"] = True
+        try:
+            log(f"[redeem] Auto-canjeando: {pos['title'][:45]}…")
+            ok, msg = redeem_position(token_id, pos["title"],
+                                      pos.get("condition_id", ""),
+                                      pos.get("outcome_index", -1))
+            if ok:
+                record_close(pos["title"], pos.get("outcome", ""),
+                             pos.get("size", 0), pos.get("avg_price", 0),
+                             1.0, "canjeada")
+        finally:
+            state["_redeeming"] = False
+        break  # one per call — next cycle handles the rest
+
+
 # ─── Loop del bot propio ──────────────────────────────────────────────────────
 
 def bot_loop():
@@ -375,16 +432,18 @@ def bot_loop():
             enriched = enrich_positions(raw)
             state["positions"] = enriched
             state["last_update"] = datetime.now().isoformat()
+            # Clean up losing positions Polymarket has already settled
+            active_ids = {p["token_id"] for p in raw if p.get("asset") or p.get("tokenId")}
+            purge_settled_losses(active_ids)
+            check_and_redeem()
 
             for pos in enriched:
                 if pos["sold"]:
                     continue
                 token_id = pos["token_id"]
 
-                # 1) Redeem on-chain if Polymarket marks it redeemable
-                if pos.get("redeemable") and token_id not in state["redeemed_tokens"]:
-                    log(f"[redeem] Mercado resuelto, canjeando: {pos['title'][:45]}…")
-                    redeem_position(token_id, pos["title"])
+                # 1) Skip redeemable — handled by check_and_redeem()
+                if pos.get("redeemable"):
                     continue
 
                 # 2) Price near 1 → market resolved as winner, sell at market while
@@ -397,6 +456,8 @@ def bot_loop():
                     ok, msg = sell_position(token_id, pos["size"], pos["current_price"])
                     if ok:
                         credit_budget(pos["size"], pos["current_price"])
+                        record_close(pos["title"], pos["outcome"], pos["size"],
+                                     pos["avg_price"], pos["current_price"], "vendida")
                     else:
                         log(f"Error al vender posición resuelta: {msg}")
                     continue
@@ -424,6 +485,8 @@ def bot_loop():
                     ok, msg = sell_position(pos["token_id"], pos["size"], pos["current_price"])
                     if ok:
                         credit_budget(pos["size"], pos["current_price"])
+                        record_close(pos["title"], pos["outcome"], pos["size"],
+                                     pos["avg_price"], pos["current_price"], "vendida")
                     else:
                         log(f"Error al vender automáticamente: {msg}")
         except Exception as e:
@@ -567,6 +630,53 @@ def credit_budget(size: float, price: float) -> float:
     save_config()
     log(f"[budget] Venta recupera ${recovered:.0f} → gastado hoy ${s['spent_today']:.2f}")
     return float(recovered)
+
+
+TAKER_FEE = 0.02
+
+def record_close(title: str, outcome: str, size: float, avg_price: float,
+                 close_price: float, close_type: str):
+    """Append a closed position to the history log."""
+    cost    = round(size * avg_price, 2)
+    revenue = round(size * close_price * (1 - TAKER_FEE) if close_type != "canjeada" else size * close_price, 2)
+    profit  = round(revenue - cost, 2)
+    state["closed_positions"].insert(0, {
+        "ts":          datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "title":       title,
+        "outcome":     outcome,
+        "size":        round(size, 4),
+        "avg_price":   round(avg_price, 4),
+        "close_price": round(close_price, 4),
+        "cost":        cost,
+        "revenue":     revenue,
+        "profit":      profit,
+        "type":        close_type,  # "vendida" | "canjeada" | "perdida"
+    })
+    state["closed_positions"] = state["closed_positions"][:500]
+    # Update session stats
+    sess = state["session"]
+    sess["profit"] = round(sess["profit"] + profit, 2)
+    if close_type == "perdida":
+        sess["lost"] += 1
+    else:
+        if profit >= 0:
+            sess["won"] += 1
+        else:
+            sess["lost"] += 1
+    save_config()
+
+
+def purge_settled_losses(active_token_ids: set):
+    """Remove hidden losing positions that Polymarket has already settled (gone from portfolio).
+    The loss was already recorded in record_close() when the position was first hidden,
+    so we only need to clean up state here — no double-counting."""
+    settled = [tid for tid in list(state["hidden_tokens"]) if tid not in active_token_ids]
+    for tid in settled:
+        state["hidden_positions"].pop(tid, {})
+        state["hidden_tokens"].discard(tid)
+    if settled:
+        save_config()
+        log(f"[bot] {len(settled)} apuesta(s) perdida(s) liquidada(s) por Polymarket (ya contabilizadas)")
 
 
 def calculate_bet(their_usdc: float, profile_address: str) -> tuple[float, str | None]:
@@ -798,7 +908,14 @@ def copy_trade_loop():
     backoff: dict[str, tuple[float, float]] = {}  # addr -> (next_allowed_ts, current_delay)
     portfolio_refresh: dict[str, float] = {}       # addr -> last_refresh_ts
 
+    last_redeem_check = 0.0
     while state["copy_running"]:
+        # Check for redeemable positions every 30 s (also covered by bot_loop if running)
+        now = time.time()
+        if not state["bot_running"] and now - last_redeem_check > 30:
+            check_and_redeem()
+            last_redeem_check = now
+
         profiles = [p for p in state["copy_profiles"].values() if p.get("active", True)]
         now = time.time()
 
@@ -915,10 +1032,38 @@ def api_hide():
         return jsonify({"ok": False})
     if hide:
         state["hidden_tokens"].add(token_id)
+        title   = data.get("title", "")
+        outcome = data.get("outcome", "")
+        size    = float(data.get("size", 0))
+        avg_price = float(data.get("avg_price", 0))
+        state["hidden_positions"][token_id] = {
+            "title": title, "outcome": outcome,
+            "size": size, "avg_price": avg_price,
+            "cost": round(size * avg_price, 2), "reason": "manual",
+        }
     else:
         state["hidden_tokens"].discard(token_id)
+        state["hidden_positions"].pop(token_id, None)
     save_config()
     return jsonify({"ok": True})
+
+
+@app.route("/api/positions/closed", methods=["GET"])
+def api_closed_positions():
+    return jsonify(state["closed_positions"])
+
+
+@app.route("/api/positions/hidden", methods=["GET"])
+def api_hidden_positions():
+    result = []
+    for token_id, meta in state["hidden_positions"].items():
+        result.append({"token_id": token_id, **meta})
+    # Also include token_ids in hidden_tokens that lack metadata
+    for token_id in state["hidden_tokens"]:
+        if token_id not in state["hidden_positions"]:
+            result.append({"token_id": token_id, "title": token_id[:30] + "…",
+                           "outcome": "", "size": 0, "avg_price": 0, "cost": 0, "reason": "?"})
+    return jsonify(result)
 
 
 @app.route("/api/redeem", methods=["POST"])
@@ -930,7 +1075,14 @@ def api_redeem():
         return jsonify({"ok": False, "error": "token_id requerido"})
     if token_id in state["redeemed_tokens"]:
         return jsonify({"ok": True, "msg": "Ya canjeado"})
-    ok, msg = redeem_position(token_id, title)
+    condition_id  = data.get("condition_id", "")
+    outcome_index = int(data.get("outcome_index", -1))
+    ok, msg = redeem_position(token_id, title, condition_id, outcome_index)
+    if ok:
+        # Find position metadata for the record
+        pos = next((p for p in state["positions"] if p["token_id"] == token_id), {})
+        record_close(title, pos.get("outcome", ""), pos.get("size", 0),
+                     pos.get("avg_price", 0), 1.0, "canjeada")
     return jsonify({"ok": ok, "error": msg if not ok else "", "tx": msg if ok else ""})
 
 
@@ -944,10 +1096,43 @@ def api_sell():
         return jsonify({"ok": False, "error": "token_id y size requeridos"})
     size_f  = float(size)
     price_f = float(price) if price else 0.0
+    pos = next((p for p in state["positions"] if p["token_id"] == token_id), {})
     ok, msg = sell_position(token_id, size_f, price_f if price_f > 0 else None)
-    if ok and price_f > 0:
-        credit_budget(size_f, price_f)
+    if ok:
+        if price_f > 0:
+            credit_budget(size_f, price_f)
+        record_close(pos.get("title", token_id[:30]), pos.get("outcome", ""),
+                     size_f, pos.get("avg_price", 0), price_f, "vendida")
     return jsonify({"ok": ok, "error": msg if not ok else ""})
+
+
+@app.route("/api/session", methods=["GET"])
+def api_session():
+    balance_usdc = 0.0
+    try:
+        from web3 import Web3
+        from web3.middleware import ExtraDataToPOAMiddleware
+        from eth_account import Account
+        pk = state["credentials"].get("private_key", "")
+        if pk:
+            w3 = Web3(Web3.HTTPProvider("https://polygon-bor-rpc.publicnode.com"))
+            w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
+            acct = Account.from_key(pk)
+            USDC = Web3.to_checksum_address("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174")
+            abi  = [{"inputs":[{"name":"account","type":"address"}],"name":"balanceOf",
+                     "outputs":[{"name":"","type":"uint256"}],"type":"function","stateMutability":"view"}]
+            balance_usdc = w3.eth.contract(address=USDC, abi=abi)\
+                            .functions.balanceOf(acct.address).call() / 1_000_000
+    except Exception:
+        pass
+    sess = state["session"]
+    return jsonify({
+        "balance":  round(balance_usdc, 2),
+        "profit":   sess["profit"],
+        "won":      sess["won"],
+        "lost":     sess["lost"],
+        "start":    sess["start"],
+    })
 
 
 @app.route("/api/bot/start", methods=["POST"])
