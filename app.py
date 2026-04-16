@@ -745,17 +745,13 @@ def execute_copy_trade(token_id: str, amount_usdc: float) -> tuple[bool, str]:
 
 def execute_copy_sell(token_id: str, title: str, profile_username: str) -> tuple[bool, str]:
     """Sell our copy position for a given token. Returns (success, message)."""
-    # Find our current size from the Data API positions
+    # copy_positions["size"] stores the USDC amount spent, NOT the token count.
+    # Always fetch the real token count from the Data API so that sell_position()
+    # and credit_budget() receive the correct number of shares.
     address = state["credentials"].get("address", "").strip()
-    our_size = 0.0
+    our_size = 0.0  # real token count
 
-    # First check our tracked copy_positions
-    tracked = state["copy_positions"].get(token_id)
-    if tracked:
-        our_size = tracked.get("size", 0.0)
-
-    # Fallback: fetch live from Data API to get actual size
-    if our_size <= 0 and address:
+    if address:
         try:
             resp = requests.get(
                 f"{DATA_HOST}/positions",
