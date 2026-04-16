@@ -3,6 +3,7 @@ import math
 import os
 import random
 import re
+import sqlite3
 import threading
 import time
 from datetime import date, datetime
@@ -11,6 +12,12 @@ import requests
 from flask import Flask, jsonify, render_template, request
 
 app = Flask(__name__)
+
+# ─── Paths ────────────────────────────────────────────────────────────────────
+
+DB_FILE     = os.path.join(os.path.dirname(__file__), "polymarket.db")
+CONFIG_FILE = os.path.join(os.path.dirname(__file__), "config.json")
+BACKUP_FILE = os.path.join(os.path.dirname(__file__), "config.json.bak")
 
 # ─── Estado global ───────────────────────────────────────────────────────────
 
@@ -30,8 +37,8 @@ state = {
     "sold_tokens": set(),
     "redeemed_tokens": set(),
     "hidden_tokens": set(),
-    "hidden_positions": {},  # token_id -> {title, outcome, size, avg_price, reason}
-    "closed_positions": [],  # [{title, outcome, size, avg_price, close_price, profit, type, ts}]
+    "hidden_positions": {},  # token_id -> {title, outcome, size, avg_price, cost, reason}
+    # closed_positions and copy_trades removed — live in DB
     "session": {            # resets on every server restart
         "profit": 0.0,
         "won": 0,
@@ -40,63 +47,331 @@ state = {
     },
     # ── Copy trading ──────────────────────────────────────────────────────────
     "copy_profiles": {},   # address -> profile dict
-    "copy_trades": [],     # list of trade records (most recent first)
-    "copy_positions": {},  # token_id -> {size, market, profile} — positions opened via copy
+    "copy_positions": {},  # token_id -> {size, market, profile, bought_at}
     "copy_settings": {
-        "mode": "proportional",   # "proportional" | "fixed"
+        # spent_today / budget_date removed — live in daily_budget table
+        "mode": "proportional",
         "fixed_amount": 5.0,
         "daily_budget": 50.0,
-        "spent_today": 0.0,
-        "budget_date": "",
     },
     "copy_running": False,
     "copy_thread": None,
 }
 
-CONFIG_FILE = os.path.join(os.path.dirname(__file__), "config.json")
-
 CLOB_HOST = "https://clob.polymarket.com"
 DATA_HOST = "https://data-api.polymarket.com"
 
-# ─── Persistencia ────────────────────────────────────────────────────────────
+# ─── SQLite helpers ───────────────────────────────────────────────────────────
 
-def load_config():
-    if os.path.exists(CONFIG_FILE):
-        try:
-            with open(CONFIG_FILE, "r") as f:
-                data = json.load(f)
-            state["credentials"].update(data.get("credentials", {}))
-            state["profit_targets"] = data.get("profit_targets", {})
-            state["hidden_tokens"]    = set(data.get("hidden_tokens", []))
-            state["redeemed_tokens"]  = set(data.get("redeemed_tokens", []))
-            state["hidden_positions"] = data.get("hidden_positions", {})
-            state["closed_positions"] = data.get("closed_positions", [])
-            # Copy trading
-            state["copy_settings"].update(data.get("copy_settings", {}))
-            for p in data.get("copy_profiles", []):
+_db_lock = threading.Lock()
+
+
+def _db_conn():
+    """Open a short-lived WAL connection. Each call gets its own connection."""
+    conn = sqlite3.connect(DB_FILE, timeout=10, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    return conn
+
+
+def init_db():
+    """Create all tables if they don't exist yet."""
+    with _db_lock:
+        with _db_conn() as conn:
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS kv (
+                    key   TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS daily_budget (
+                    date  TEXT PRIMARY KEY,
+                    spent REAL DEFAULT 0.0
+                );
+
+                CREATE TABLE IF NOT EXISTS closed_positions (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts          TEXT,
+                    title       TEXT,
+                    outcome     TEXT,
+                    size        REAL,
+                    avg_price   REAL,
+                    close_price REAL,
+                    cost        REAL,
+                    revenue     REAL,
+                    profit      REAL,
+                    type        TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS copy_trades_log (
+                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts         TEXT,
+                    profile    TEXT,
+                    market     TEXT,
+                    side       TEXT,
+                    their_usdc REAL,
+                    our_amount REAL,
+                    status     TEXT,
+                    reason     TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS hidden_positions (
+                    token_id  TEXT PRIMARY KEY,
+                    title     TEXT,
+                    outcome   TEXT,
+                    size      REAL,
+                    avg_price REAL,
+                    cost      REAL,
+                    reason    TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS copy_positions (
+                    token_id  TEXT PRIMARY KEY,
+                    size      REAL,
+                    market    TEXT,
+                    profile   TEXT,
+                    bought_at REAL
+                );
+
+                CREATE TABLE IF NOT EXISTS redeemed_tokens (
+                    token_id TEXT PRIMARY KEY
+                );
+            """)
+
+
+# ─── DB write helpers (always use _db_lock) ───────────────────────────────────
+
+def _save_settings():
+    """Persist credentials, profit_targets, copy_settings (no spent/date), copy_profiles to kv."""
+    cs = state["copy_settings"]
+    settings_to_save = {k: cs[k] for k in ("mode", "fixed_amount", "daily_budget") if k in cs}
+    with _db_lock:
+        with _db_conn() as conn:
+            conn.execute("INSERT OR REPLACE INTO kv VALUES ('credentials', ?)",
+                         (json.dumps(state["credentials"]),))
+            conn.execute("INSERT OR REPLACE INTO kv VALUES ('profit_targets', ?)",
+                         (json.dumps(state["profit_targets"]),))
+            conn.execute("INSERT OR REPLACE INTO kv VALUES ('copy_settings', ?)",
+                         (json.dumps(settings_to_save),))
+            conn.execute("INSERT OR REPLACE INTO kv VALUES ('copy_profiles', ?)",
+                         (json.dumps(list(state["copy_profiles"].values())),))
+
+
+# Backward-compatible alias — ~15 call sites use save_config() unchanged
+save_config = _save_settings
+
+
+def _upsert_hidden(token_id: str, meta: dict):
+    """Insert or replace a row in hidden_positions and update in-memory caches."""
+    state["hidden_tokens"].add(token_id)
+    state["hidden_positions"][token_id] = meta
+    with _db_lock:
+        with _db_conn() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO hidden_positions "
+                "(token_id, title, outcome, size, avg_price, cost, reason) "
+                "VALUES (?,?,?,?,?,?,?)",
+                (token_id, meta.get("title", ""), meta.get("outcome", ""),
+                 meta.get("size", 0), meta.get("avg_price", 0),
+                 meta.get("cost", 0), meta.get("reason", ""))
+            )
+
+
+def _delete_hidden(token_id: str):
+    """Remove a token from hidden_positions and update in-memory caches."""
+    state["hidden_tokens"].discard(token_id)
+    state["hidden_positions"].pop(token_id, None)
+    with _db_lock:
+        with _db_conn() as conn:
+            conn.execute("DELETE FROM hidden_positions WHERE token_id=?", (token_id,))
+
+
+def _upsert_copy_position(token_id: str, data: dict):
+    """Insert or replace a copy_positions row and update in-memory cache."""
+    state["copy_positions"][token_id] = data
+    with _db_lock:
+        with _db_conn() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO copy_positions "
+                "(token_id, size, market, profile, bought_at) VALUES (?,?,?,?,?)",
+                (token_id, data.get("size", 0), data.get("market", ""),
+                 data.get("profile", ""), data.get("bought_at", 0))
+            )
+
+
+def _delete_copy_position(token_id: str):
+    """Remove a copy_positions row and update in-memory cache."""
+    state["copy_positions"].pop(token_id, None)
+    with _db_lock:
+        with _db_conn() as conn:
+            conn.execute("DELETE FROM copy_positions WHERE token_id=?", (token_id,))
+
+
+def _add_redeemed(token_id: str):
+    """Mark token as redeemed in DB and in-memory set."""
+    state["redeemed_tokens"].add(token_id)
+    with _db_lock:
+        with _db_conn() as conn:
+            conn.execute("INSERT OR IGNORE INTO redeemed_tokens (token_id) VALUES (?)", (token_id,))
+
+
+def _add_spent(amount_usdc: float):
+    """UPSERT today's budget row and add amount to spent."""
+    today = date.today().isoformat()
+    with _db_lock:
+        with _db_conn() as conn:
+            conn.execute(
+                "INSERT INTO daily_budget (date, spent) VALUES (?, ?) "
+                "ON CONFLICT(date) DO UPDATE SET spent = spent + excluded.spent",
+                (today, amount_usdc)
+            )
+
+
+def _credit_spent(amount_usdc: float):
+    """Decrement today's spent by amount_usdc (floor at 0)."""
+    today = date.today().isoformat()
+    with _db_lock:
+        with _db_conn() as conn:
+            conn.execute("INSERT OR IGNORE INTO daily_budget (date, spent) VALUES (?, 0.0)", (today,))
+            conn.execute(
+                "UPDATE daily_budget SET spent = MAX(0.0, spent - ?) WHERE date=?",
+                (amount_usdc, today)
+            )
+
+
+def _insert_copy_trade(record: dict):
+    """Append a copy-trade log entry to copy_trades_log."""
+    with _db_lock:
+        with _db_conn() as conn:
+            conn.execute(
+                "INSERT INTO copy_trades_log "
+                "(ts, profile, market, side, their_usdc, our_amount, status, reason) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                (record.get("ts", ""), record.get("profile", ""),
+                 record.get("market", ""), record.get("side", ""),
+                 record.get("their_usdc", 0.0), record.get("our_amount", 0.0),
+                 record.get("status", ""), record.get("reason", ""))
+            )
+
+
+# ─── Migration from config.json ───────────────────────────────────────────────
+
+def migrate_from_json():
+    """One-time migration. Only runs if config.json exists and kv table is empty."""
+    if not os.path.exists(CONFIG_FILE):
+        return
+    with _db_conn() as conn:
+        if conn.execute("SELECT COUNT(*) FROM kv").fetchone()[0] > 0:
+            return  # already migrated
+    print("[migrate] Migrando config.json → polymarket.db …")
+    try:
+        with open(CONFIG_FILE) as f:
+            data = json.load(f)
+    except Exception as e:
+        print(f"[migrate] Error leyendo config.json: {e}")
+        return
+
+    with _db_lock:
+        with _db_conn() as conn:
+            # kv: credentials
+            conn.execute("INSERT OR REPLACE INTO kv VALUES ('credentials', ?)",
+                         (json.dumps(data.get("credentials", {})),))
+            # kv: profit_targets
+            conn.execute("INSERT OR REPLACE INTO kv VALUES ('profit_targets', ?)",
+                         (json.dumps(data.get("profit_targets", {})),))
+            # kv: copy_settings (drop spent_today/budget_date)
+            cs = data.get("copy_settings", {})
+            conn.execute("INSERT OR REPLACE INTO kv VALUES ('copy_settings', ?)",
+                         (json.dumps({k: cs[k] for k in ("mode", "fixed_amount", "daily_budget") if k in cs}),))
+            # kv: copy_profiles
+            conn.execute("INSERT OR REPLACE INTO kv VALUES ('copy_profiles', ?)",
+                         (json.dumps(data.get("copy_profiles", [])),))
+            # daily_budget: migrate spent_today if it was today
+            today = date.today().isoformat()
+            old_date  = cs.get("budget_date", "")
+            old_spent = float(cs.get("spent_today", 0.0))
+            if old_date == today and old_spent > 0:
+                conn.execute("INSERT OR REPLACE INTO daily_budget (date, spent) VALUES (?, ?)",
+                             (today, old_spent))
+            # hidden_positions
+            for tid, meta in data.get("hidden_positions", {}).items():
+                conn.execute(
+                    "INSERT OR IGNORE INTO hidden_positions "
+                    "(token_id, title, outcome, size, avg_price, cost, reason) VALUES (?,?,?,?,?,?,?)",
+                    (tid, meta.get("title", ""), meta.get("outcome", ""),
+                     meta.get("size", 0), meta.get("avg_price", 0),
+                     meta.get("cost", 0), meta.get("reason", ""))
+                )
+            # hidden_tokens not already in hidden_positions
+            for tid in data.get("hidden_tokens", []):
+                conn.execute(
+                    "INSERT OR IGNORE INTO hidden_positions "
+                    "(token_id, title, outcome, size, avg_price, cost, reason) VALUES (?,?,?,?,?,?,?)",
+                    (tid, "", "", 0, 0, 0, "?")
+                )
+            # copy_positions
+            for tid, cp in data.get("copy_positions", {}).items():
+                conn.execute(
+                    "INSERT OR IGNORE INTO copy_positions "
+                    "(token_id, size, market, profile, bought_at) VALUES (?,?,?,?,?)",
+                    (tid, cp.get("size", 0), cp.get("market", ""),
+                     cp.get("profile", ""), cp.get("bought_at", 0))
+                )
+            # redeemed_tokens
+            for tid in data.get("redeemed_tokens", []):
+                conn.execute("INSERT OR IGNORE INTO redeemed_tokens (token_id) VALUES (?)", (tid,))
+            # closed_positions — reversed so oldest row gets lowest id
+            for p in reversed(data.get("closed_positions", [])):
+                conn.execute(
+                    "INSERT INTO closed_positions "
+                    "(ts, title, outcome, size, avg_price, close_price, cost, revenue, profit, type) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    (p.get("ts", ""), p.get("title", ""), p.get("outcome", ""),
+                     p.get("size", 0), p.get("avg_price", 0), p.get("close_price", 0),
+                     p.get("cost", 0), p.get("revenue", 0), p.get("profit", 0), p.get("type", ""))
+                )
+
+    os.rename(CONFIG_FILE, BACKUP_FILE)
+    print(f"[migrate] Migración completa. config.json renombrado a config.json.bak")
+
+
+# ─── Load from DB (replaces load_config) ─────────────────────────────────────
+
+def load_from_db():
+    """Populate in-memory state from SQLite at startup."""
+    try:
+        with _db_conn() as conn:
+            def kv_get(key, default):
+                row = conn.execute("SELECT value FROM kv WHERE key=?", (key,)).fetchone()
+                return json.loads(row["value"]) if row else default
+
+            state["credentials"].update(kv_get("credentials", {}))
+            state["profit_targets"] = kv_get("profit_targets", {})
+            cs = kv_get("copy_settings", {})
+            state["copy_settings"].update(cs)
+            for p in kv_get("copy_profiles", []):
                 state["copy_profiles"][p["address"]] = p
-            state["copy_positions"] = data.get("copy_positions", {})
-        except Exception:
-            pass
 
+            # hidden_positions → populate both dict and set
+            for row in conn.execute("SELECT * FROM hidden_positions").fetchall():
+                r = dict(row)
+                tid = r.pop("token_id")
+                state["hidden_positions"][tid] = r
+                state["hidden_tokens"].add(tid)
 
-def save_config():
-    with open(CONFIG_FILE, "w") as f:
-        json.dump(
-            {
-                "credentials": state["credentials"],
-                "profit_targets": state["profit_targets"],
-                "hidden_tokens":    list(state["hidden_tokens"]),
-                "redeemed_tokens":  list(state["redeemed_tokens"]),
-                "hidden_positions": state["hidden_positions"],
-                "closed_positions": state["closed_positions"],
-                "copy_settings": state["copy_settings"],
-                "copy_profiles": list(state["copy_profiles"].values()),
-                "copy_positions": state["copy_positions"],
-            },
-            f,
-            indent=2,
-        )
+            # copy_positions
+            for row in conn.execute("SELECT * FROM copy_positions").fetchall():
+                r = dict(row)
+                tid = r.pop("token_id")
+                state["copy_positions"][tid] = r
+
+            # redeemed_tokens
+            for row in conn.execute("SELECT token_id FROM redeemed_tokens").fetchall():
+                state["redeemed_tokens"].add(row["token_id"])
+
+    except Exception as e:
+        print(f"[db] Error en load_from_db: {e}")
 
 
 # ─── Logging ─────────────────────────────────────────────────────────────────
@@ -121,18 +396,15 @@ def init_client() -> bool:
             log("No hay clave privada configurada.")
             return False
 
-        # Derive signer address from private key first
         from eth_account import Account
         signer_addr = Account.from_key(pk).address
 
         configured_addr = (state["credentials"].get("address") or "").strip()
-        # Only use funder/sig_type=2 when the configured address is a DIFFERENT address
-        # (i.e. the user's Polymarket proxy wallet, separate from the signing key)
         if configured_addr and configured_addr.lower() != signer_addr.lower():
-            funder = configured_addr
+            funder   = configured_addr
             sig_type = 2
         else:
-            funder = None
+            funder   = None
             sig_type = 0
 
         client = ClobClient(CLOB_HOST, key=pk, chain_id=POLYGON, signature_type=sig_type, funder=funder)
@@ -199,10 +471,10 @@ def enrich_positions(raw_positions: list) -> list:
             raw.get("asset") or raw.get("tokenId") or
             raw.get("token_id") or raw.get("conditionId") or ""
         )
-        size = float(raw.get("size") or 0)
-        avg_price = float(raw.get("avgPrice") or raw.get("averagePrice") or 0)
+        size          = float(raw.get("size") or 0)
+        avg_price     = float(raw.get("avgPrice") or raw.get("averagePrice") or 0)
         cur_price_api = float(raw.get("curPrice") or 0)
-        redeemable = bool(raw.get("redeemable", False))
+        redeemable    = bool(raw.get("redeemable", False))
         condition_id  = raw.get("conditionId", "")
         outcome_index = int(raw.get("outcomeIndex", 0))
         title = (
@@ -216,23 +488,20 @@ def enrich_positions(raw_positions: list) -> list:
         if token_id in state["hidden_tokens"]:
             continue
 
-        # Always fetch live CLOB price; fall back to data-API value if unavailable
-        # Small delay to avoid hitting rate limits when many positions are open
         time.sleep(0.1)
         live_price = get_best_bid(token_id)
-        current = live_price if live_price > 0 else cur_price_api
+        current    = live_price if live_price > 0 else cur_price_api
 
-        # Auto-hide worthless losing positions (market resolved against us)
+        # Auto-hide worthless losing positions
         if current < 0.01:
             is_new = token_id not in state["hidden_tokens"]
-            state["hidden_tokens"].add(token_id)
-            state["hidden_positions"][token_id] = {
+            meta = {
                 "title": title, "outcome": outcome,
                 "size": round(size, 4), "avg_price": round(avg_price, 4),
                 "cost": round(size * avg_price, 2), "reason": "perdida",
             }
+            _upsert_hidden(token_id, meta)
             if is_new:
-                # Record the loss immediately so P&L reflects it right away
                 record_close(title, outcome, round(size, 4), round(avg_price, 4), 0.0, "perdida")
                 log(f"[bot] Apuesta perdida ocultada y contabilizada: {title[:45]}")
             save_config()
@@ -240,36 +509,36 @@ def enrich_positions(raw_positions: list) -> list:
 
         pnl_pct = ((current - avg_price) / avg_price * 100) if avg_price > 0 else 0.0
 
-        TAKER_FEE = 0.02  # Polymarket taker fee 2%
+        TAKER_FEE  = 0.02
         cost       = round(size * avg_price, 2)
         sell_value = round(size * current * (1 - TAKER_FEE), 2)
         net_profit = round(sell_value - cost, 2)
 
-        target = state["profit_targets"].get(token_id)
-        already_sold    = token_id in state["sold_tokens"]
+        target           = state["profit_targets"].get(token_id)
+        already_sold     = token_id in state["sold_tokens"]
         already_redeemed = token_id in state["redeemed_tokens"]
         if already_redeemed:
             continue
 
         result.append(
             {
-                "token_id": token_id,
-                "title": title,
-                "outcome": outcome,
-                "size": round(size, 4),
-                "avg_price": round(avg_price, 4),
-                "current_price": round(current, 4),
-                "value": round(size * current, 2),
-                "cost": cost,
-                "sell_value": sell_value,
-                "net_profit": net_profit,
-                "pnl_pct": round(pnl_pct, 2),
-                "target_pct": target,
-                "redeemable": redeemable,
-                "condition_id": condition_id,
-                "outcome_index": outcome_index,
+                "token_id":        token_id,
+                "title":           title,
+                "outcome":         outcome,
+                "size":            round(size, 4),
+                "avg_price":       round(avg_price, 4),
+                "current_price":   round(current, 4),
+                "value":           round(size * current, 2),
+                "cost":            cost,
+                "sell_value":      sell_value,
+                "net_profit":      net_profit,
+                "pnl_pct":         round(pnl_pct, 2),
+                "target_pct":      target,
+                "redeemable":      redeemable,
+                "condition_id":    condition_id,
+                "outcome_index":   outcome_index,
                 "auto_sell_active": target is not None and not already_sold,
-                "sold": already_sold,
+                "sold":            already_sold,
             }
         )
     return result
@@ -291,7 +560,7 @@ def sell_position(token_id: str, size: float, price: float | None = None) -> tup
             side="SELL",
         )
         signed = client.create_market_order(order_args)
-        resp = client.post_order(signed, OrderType.FOK)
+        resp   = client.post_order(signed, OrderType.FOK)
         log(f"SELL ejecutado — token: {token_id[:20]}… size: {size} → {resp}")
         state["sold_tokens"].add(token_id)
         return True, str(resp)
@@ -304,11 +573,7 @@ def sell_position(token_id: str, size: float, price: float | None = None) -> tup
 
 def redeem_position(token_id: str, title: str,
                     condition_id: str = "", outcome_index: int = -1) -> tuple[bool, str]:
-    """Redeem a resolved winning position via the CTF contract on-chain.
-
-    conditionId and outcomeIndex come directly from the Data API positions
-    response — no need to query Gamma API.
-    """
+    """Redeem a resolved winning position via the CTF contract on-chain."""
     pk = state["credentials"].get("private_key", "")
     if not pk:
         return False, "No hay clave privada"
@@ -317,7 +582,6 @@ def redeem_position(token_id: str, title: str,
         from web3.middleware import ExtraDataToPOAMiddleware
         from eth_account import Account
 
-        # 1) If not supplied, look them up from the Data API positions
         if not condition_id or outcome_index < 0:
             address = state["credentials"].get("address", "").strip()
             resp = requests.get(
@@ -329,16 +593,15 @@ def redeem_position(token_id: str, title: str,
                 return False, f"No se pudieron obtener posiciones (HTTP {resp.status_code})"
             for pos in (resp.json() if isinstance(resp.json(), list) else []):
                 if str(pos.get("asset") or pos.get("tokenId") or "") == str(token_id):
-                    condition_id   = pos.get("conditionId", "")
-                    outcome_index  = int(pos.get("outcomeIndex", 0))
+                    condition_id  = pos.get("conditionId", "")
+                    outcome_index = int(pos.get("outcomeIndex", 0))
                     break
 
         if not condition_id:
             return False, "conditionId no disponible — mercado no encontrado en Data API"
 
-        index_set = 1 << outcome_index  # 1 for outcome 0 (YES), 2 for outcome 1 (NO)
+        index_set = 1 << outcome_index
 
-        # 2) Call redeemPositions on the CTF contract
         w3 = Web3(Web3.HTTPProvider("https://polygon-bor-rpc.publicnode.com"))
         w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
         acct = Account.from_key(pk)
@@ -349,10 +612,10 @@ def redeem_position(token_id: str, title: str,
 
         CTF_ABI = [{
             "inputs": [
-                {"name": "collateralToken",     "type": "address"},
-                {"name": "parentCollectionId",  "type": "bytes32"},
-                {"name": "conditionId",         "type": "bytes32"},
-                {"name": "indexSets",           "type": "uint256[]"},
+                {"name": "collateralToken",    "type": "address"},
+                {"name": "parentCollectionId", "type": "bytes32"},
+                {"name": "conditionId",        "type": "bytes32"},
+                {"name": "indexSets",          "type": "uint256[]"},
             ],
             "name": "redeemPositions",
             "outputs": [],
@@ -360,7 +623,7 @@ def redeem_position(token_id: str, title: str,
             "stateMutability": "nonpayable",
         }]
 
-        ctf = w3.eth.contract(address=CTF_ADDRESS, abi=CTF_ABI)
+        ctf      = w3.eth.contract(address=CTF_ADDRESS, abi=CTF_ABI)
         cid_bytes = bytes.fromhex(condition_id.replace("0x", ""))
 
         tx = ctf.functions.redeemPositions(
@@ -377,8 +640,7 @@ def redeem_position(token_id: str, title: str,
         receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=60)
 
         if receipt.status == 1:
-            state["redeemed_tokens"].add(token_id)
-            save_config()
+            _add_redeemed(token_id)
             log(f"[redeem] ✓ Canjeado: {title[:45]} (tx: {tx_hash.hex()[:16]}…)")
             return True, tx_hash.hex()
         else:
@@ -391,11 +653,11 @@ def redeem_position(token_id: str, title: str,
 
 # ─── Auto-canje ──────────────────────────────────────────────────────────────
 
-state["_redeeming"] = False  # flag para evitar redeems concurrentes
+state["_redeeming"] = False
+
 
 def check_and_redeem():
-    """Find one redeemable position and redeem it. Skips if a redeem is already in flight.
-    Processes one at a time so nonces don't collide."""
+    """Find one redeemable position and redeem it. Skips if a redeem is already in flight."""
     if state["_redeeming"]:
         return
     for pos in list(state["positions"]):
@@ -406,7 +668,6 @@ def check_and_redeem():
             continue
         if token_id in state["redeemed_tokens"]:
             continue
-        # Found one — redeem it
         state["_redeeming"] = True
         try:
             log(f"[redeem] Auto-canjeando: {pos['title'][:45]}…")
@@ -428,12 +689,11 @@ def bot_loop():
     log("Bot iniciado — revisando posiciones cada 30 s.")
     while state["bot_running"]:
         try:
-            raw = fetch_positions()
+            raw      = fetch_positions()
             enriched = enrich_positions(raw)
-            state["positions"] = enriched
-            state["last_update"] = datetime.now().isoformat()
-            # Clean up losing positions Polymarket has already settled
-            active_ids = {p["token_id"] for p in raw if p.get("asset") or p.get("tokenId")}
+            state["positions"]    = enriched
+            state["last_update"]  = datetime.now().isoformat()
+            active_ids = {p["asset"] if "asset" in p else p.get("tokenId", "") for p in raw}
             purge_settled_losses(active_ids)
             check_and_redeem()
 
@@ -442,12 +702,9 @@ def bot_loop():
                     continue
                 token_id = pos["token_id"]
 
-                # 1) Skip redeemable — handled by check_and_redeem()
                 if pos.get("redeemable"):
                     continue
 
-                # 2) Price near 1 → market resolved as winner, sell at market while
-                #    order book is still open (price will drop to 0 once orders close)
                 if pos["current_price"] >= 0.95 and token_id not in state["sold_tokens"]:
                     log(
                         f"[bot] Precio {pos['current_price']:.4f} → mercado casi resuelto, "
@@ -462,15 +719,12 @@ def bot_loop():
                         log(f"Error al vender posición resuelta: {msg}")
                     continue
 
-                # Skip positions bought by copy-bot in the last 60 s — Data API avgPrice
-                # takes time to sync and produces wildly wrong P&L until then
                 copy_entry = state["copy_positions"].get(token_id)
                 if copy_entry:
                     age = time.time() - copy_entry.get("bought_at", 0)
                     if age < 60:
                         continue
 
-                # Auto-assign a random target (25–30%) to new positions that don't have one
                 if token_id not in state["profit_targets"]:
                     auto_target = random.randint(25, 30)
                     state["profit_targets"][token_id] = auto_target
@@ -516,7 +770,6 @@ def resolve_profile_url(url: str) -> tuple[str, str]:
         raise ValueError("URL inválida — usa formato: https://polymarket.com/@username")
 
     username = m.group(1)
-
     resp = requests.get(
         f"https://polymarket.com/@{username}",
         headers=SCRAPE_HEADERS,
@@ -525,19 +778,11 @@ def resolve_profile_url(url: str) -> tuple[str, str]:
     resp.raise_for_status()
     html = resp.text
 
-    # ── Strategy 1: parse __NEXT_DATA__ and search full JSON dump ────────────
-    nd_match = re.search(
-        r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>',
-        html,
-        re.DOTALL,
-    )
+    nd_match = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.DOTALL)
     if nd_match:
         try:
             next_data = json.loads(nd_match.group(1))
-            # Search the ENTIRE data dump (address lives in dehydrated query cache)
-            data_str = json.dumps(next_data)
-
-            # Look for address co-located with the username
+            data_str  = json.dumps(next_data)
             for pattern in [
                 rf'"username"\s*:\s*"{re.escape(username)}"[^{{}}]{{0,400}}"address"\s*:\s*"(0x[a-fA-F0-9]{{40}})"',
                 r'"address"\s*:\s*"(0x[a-fA-F0-9]{40})"[^{}]{0,400}"username"\s*:\s*"'
@@ -548,15 +793,12 @@ def resolve_profile_url(url: str) -> tuple[str, str]:
                 m2 = re.search(pattern, data_str, re.I | re.DOTALL)
                 if m2:
                     return username, m2.group(1).lower()
-
-            # Last-chance: first address in the whole JSON
             addresses = re.findall(r"0x[a-fA-F0-9]{40}", data_str)
             if addresses:
                 return username, addresses[0].lower()
         except (json.JSONDecodeError, Exception):
             pass
 
-    # ── Strategy 2: search raw HTML for any of these field patterns ──────────
     for pattern in [
         r'"address"\s*:\s*"(0x[a-fA-F0-9]{40})"',
         r'"proxyWallet"\s*:\s*"(0x[a-fA-F0-9]{40})"',
@@ -575,12 +817,7 @@ def resolve_profile_url(url: str) -> tuple[str, str]:
 def get_user_activity(address: str, limit: int = 20) -> list:
     resp = requests.get(
         f"{DATA_HOST}/activity",
-        params={
-            "user": address,
-            "limit": limit,
-            "sortBy": "TIMESTAMP",
-            "sortDirection": "DESC",
-        },
+        params={"user": address, "limit": limit, "sortBy": "TIMESTAMP", "sortDirection": "DESC"},
         timeout=10,
     )
     if resp.status_code == 429:
@@ -592,11 +829,7 @@ def get_user_activity(address: str, limit: int = 20) -> list:
 
 def get_portfolio_value(address: str) -> float:
     try:
-        resp = requests.get(
-            f"{DATA_HOST}/value",
-            params={"user": address},
-            timeout=10,
-        )
+        resp = requests.get(f"{DATA_HOST}/value", params={"user": address}, timeout=10)
         if resp.status_code != 200:
             return 0.0
         data = resp.json()
@@ -609,79 +842,80 @@ def get_portfolio_value(address: str) -> float:
 
 # ─── Copy Trading — Budget ────────────────────────────────────────────────────
 
-def get_remaining_budget() -> float:
-    s = state["copy_settings"]
+def get_spent_today() -> float:
+    """Read today's spent from DB (no lock needed — WAL allows concurrent reads)."""
     today = date.today().isoformat()
-    if s.get("budget_date") != today:
-        s["spent_today"] = 0.0
-        s["budget_date"] = today
-        save_config()
-    return max(0.0, s["daily_budget"] - s["spent_today"])
+    with _db_conn() as conn:
+        row = conn.execute("SELECT spent FROM daily_budget WHERE date=?", (today,)).fetchone()
+        return float(row["spent"]) if row else 0.0
+
+
+def get_remaining_budget() -> float:
+    budget = state["copy_settings"]["daily_budget"]
+    return max(0.0, budget - get_spent_today())
 
 
 def credit_budget(size: float, price: float) -> float:
-    """Reduce spent_today by floor(size * price) when a copied position is sold.
-    Returns the amount credited (floored USDC)."""
+    """Reduce spent by floor(size * price) when a position is sold. Returns amount credited."""
     recovered = math.floor(size * price)
     if recovered <= 0:
         return 0.0
-    s = state["copy_settings"]
-    s["spent_today"] = max(0.0, s.get("spent_today", 0.0) - recovered)
-    save_config()
-    log(f"[budget] Venta recupera ${recovered:.0f} → gastado hoy ${s['spent_today']:.2f}")
+    today = date.today().isoformat()
+    with _db_lock:
+        with _db_conn() as conn:
+            conn.execute("INSERT OR IGNORE INTO daily_budget (date, spent) VALUES (?, 0.0)", (today,))
+            conn.execute(
+                "UPDATE daily_budget SET spent = MAX(0.0, spent - ?) WHERE date=?",
+                (recovered, today)
+            )
+    spent = get_spent_today()
+    log(f"[budget] Venta recupera ${recovered:.0f} → gastado hoy ${spent:.2f}")
     return float(recovered)
 
 
 TAKER_FEE = 0.02
 
+
 def record_close(title: str, outcome: str, size: float, avg_price: float,
                  close_price: float, close_type: str):
-    """Append a closed position to the history log."""
+    """Write a closed position to the DB and update session stats."""
     cost    = round(size * avg_price, 2)
-    revenue = round(size * close_price * (1 - TAKER_FEE) if close_type != "canjeada" else size * close_price, 2)
-    profit  = round(revenue - cost, 2)
-    state["closed_positions"].insert(0, {
-        "ts":          datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "title":       title,
-        "outcome":     outcome,
-        "size":        round(size, 4),
-        "avg_price":   round(avg_price, 4),
-        "close_price": round(close_price, 4),
-        "cost":        cost,
-        "revenue":     revenue,
-        "profit":      profit,
-        "type":        close_type,  # "vendida" | "canjeada" | "perdida"
-    })
-    state["closed_positions"] = state["closed_positions"][:500]
-    # Update session stats
+    revenue = round(
+        size * close_price * (1 - TAKER_FEE) if close_type != "canjeada" else size * close_price,
+        2,
+    )
+    profit = round(revenue - cost, 2)
+    with _db_lock:
+        with _db_conn() as conn:
+            conn.execute(
+                "INSERT INTO closed_positions "
+                "(ts, title, outcome, size, avg_price, close_price, cost, revenue, profit, type) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (datetime.now().strftime("%Y-%m-%d %H:%M"), title, outcome,
+                 round(size, 4), round(avg_price, 4), round(close_price, 4),
+                 cost, revenue, profit, close_type)
+            )
     sess = state["session"]
     sess["profit"] = round(sess["profit"] + profit, 2)
     if close_type == "perdida":
         sess["lost"] += 1
     else:
-        if profit >= 0:
-            sess["won"] += 1
-        else:
-            sess["lost"] += 1
-    save_config()
+        sess["won"]  += 1 if profit >= 0 else 0
+        sess["lost"] += 0 if profit >= 0 else 1
 
 
 def purge_settled_losses(active_token_ids: set):
-    """Remove hidden losing positions that Polymarket has already settled (gone from portfolio).
-    The loss was already recorded in record_close() when the position was first hidden,
-    so we only need to clean up state here — no double-counting."""
+    """Remove hidden losing positions that Polymarket has already settled."""
     settled = [tid for tid in list(state["hidden_tokens"]) if tid not in active_token_ids]
     for tid in settled:
-        state["hidden_positions"].pop(tid, {})
-        state["hidden_tokens"].discard(tid)
+        _delete_hidden(tid)
     if settled:
-        save_config()
         log(f"[bot] {len(settled)} apuesta(s) perdida(s) liquidada(s) por Polymarket (ya contabilizadas)")
 
 
 def calculate_bet(their_usdc: float, profile_address: str) -> tuple[float, str | None]:
     """Returns (amount_usdc, skip_reason_or_None)."""
-    s = state["copy_settings"]
+    s         = state["copy_settings"]
     remaining = get_remaining_budget()
 
     if remaining < 1.0:
@@ -690,15 +924,13 @@ def calculate_bet(their_usdc: float, profile_address: str) -> tuple[float, str |
     if s["mode"] == "fixed":
         amount = s["fixed_amount"]
     else:
-        profile = state["copy_profiles"].get(profile_address, {})
+        profile       = state["copy_profiles"].get(profile_address, {})
         portfolio_val = profile.get("portfolio_value", 0.0)
-
         if portfolio_val <= 0:
-            # No portfolio data yet — fall back to fixed amount
             amount = s["fixed_amount"]
         else:
             proportion = their_usdc / portfolio_val
-            amount = proportion * s["daily_budget"]
+            amount     = proportion * s["daily_budget"]
 
     if amount < 1.0:
         return 0.0, f"Apuesta calculada ${amount:.2f} < mínimo $1.00"
@@ -721,17 +953,12 @@ def execute_copy_trade(token_id: str, amount_usdc: float) -> tuple[bool, str]:
     try:
         from py_clob_client.clob_types import MarketOrderArgs, OrderType
 
-        order_args = MarketOrderArgs(
-            token_id=token_id,
-            amount=amount_usdc,
-            side="BUY",
-        )
-        signed = client.create_market_order(order_args)
-        # Log key order fields to diagnose signature issues
+        order_args = MarketOrderArgs(token_id=token_id, amount=amount_usdc, side="BUY")
+        signed     = client.create_market_order(order_args)
         try:
-            maker = getattr(signed, "maker", None) or (signed.get("maker") if isinstance(signed, dict) else "?")
-            sig   = getattr(signed, "signature", None) or (signed.get("signature") if isinstance(signed, dict) else "?")
-            sig_type = getattr(signed, "signatureType", None) or (signed.get("signatureType") if isinstance(signed, dict) else "?")
+            maker     = getattr(signed, "maker", None) or (signed.get("maker") if isinstance(signed, dict) else "?")
+            sig       = getattr(signed, "signature", None) or (signed.get("signature") if isinstance(signed, dict) else "?")
+            sig_type  = getattr(signed, "signatureType", None) or (signed.get("signatureType") if isinstance(signed, dict) else "?")
             log(f"[order] maker={maker} | sig_type={sig_type} | sig={str(sig)[:20]}…")
         except Exception:
             log(f"[order] raw={str(signed)[:120]}")
@@ -745,11 +972,8 @@ def execute_copy_trade(token_id: str, amount_usdc: float) -> tuple[bool, str]:
 
 def execute_copy_sell(token_id: str, title: str, profile_username: str) -> tuple[bool, str]:
     """Sell our copy position for a given token. Returns (success, message)."""
-    # copy_positions["size"] stores the USDC amount spent, NOT the token count.
-    # Always fetch the real token count from the Data API so that sell_position()
-    # and credit_budget() receive the correct number of shares.
-    address = state["credentials"].get("address", "").strip()
-    our_size = 0.0  # real token count
+    address  = state["credentials"].get("address", "").strip()
+    our_size = 0.0
 
     if address:
         try:
@@ -774,20 +998,18 @@ def execute_copy_sell(token_id: str, title: str, profile_username: str) -> tuple
         return False, "No tenemos posición en este token"
 
     live_price = get_best_bid(token_id)
-    ok, msg = sell_position(token_id, our_size)
+    ok, msg    = sell_position(token_id, our_size)
     if ok:
-        state["copy_positions"].pop(token_id, None)
-        save_config()
+        _delete_copy_position(token_id)
         if live_price > 0:
             credit_budget(our_size, live_price)
     return ok, "" if ok else msg
 
 
 def process_copy_activity(profile: dict, activity: list):
-    addr = profile["address"]
+    addr      = profile["address"]
     last_seen = profile.get("last_seen_id")
 
-    # Find new TRADE items (stop at last_seen_id)
     new_trades = []
     for item in activity:
         if item.get("type") != "TRADE":
@@ -802,45 +1024,41 @@ def process_copy_activity(profile: dict, activity: list):
     if not new_trades:
         return
 
-    # Update last_seen to most recent activity
     most_recent_id = str(new_trades[0].get("id") or new_trades[0].get("transactionHash") or "")
     if most_recent_id:
         state["copy_profiles"][addr]["last_seen_id"] = most_recent_id
         save_config()
 
-    # First time seeing this profile — establish baseline, don't copy anything
     if last_seen is None:
         log(f"[copy] @{profile['username']} inicializado — {len(new_trades)} trade(s) existente(s) ignorado(s)")
         return
 
-    # Process new trades oldest-first
     for item in reversed(new_trades):
-        side = (item.get("side") or "BUY").upper()
+        side     = (item.get("side") or "BUY").upper()
         token_id = item.get("asset") or item.get("tokenId") or ""
         if not token_id:
             continue
 
-        title = str(item.get("title") or item.get("question") or item.get("market") or "?")
-        price = float(item.get("price") or 0)
-        size  = float(item.get("size") or 0)
+        title     = str(item.get("title") or item.get("question") or item.get("market") or "?")
+        price     = float(item.get("price") or 0)
+        size      = float(item.get("size") or 0)
         usdc_size = float(item.get("usdcSize") or 0)
         their_usdc = usdc_size if usdc_size > 0 else (price * size)
 
         record = {
-            "ts":        datetime.now().strftime("%H:%M:%S"),
-            "profile":   profile["username"],
-            "market":    title[:60],
-            "side":      side,
+            "ts":         datetime.now().strftime("%H:%M:%S"),
+            "profile":    profile["username"],
+            "market":     title[:60],
+            "side":       side,
             "their_usdc": round(their_usdc, 2),
             "our_amount": 0.0,
-            "status":    "",
-            "reason":    "",
+            "status":     "",
+            "reason":     "",
         }
 
         # ── SELL ─────────────────────────────────────────────────────────────
         if side == "SELL":
             if token_id not in state["copy_positions"]:
-                # We never copied this position — ignore
                 continue
 
             ok, msg = execute_copy_sell(token_id, title, profile["username"])
@@ -853,13 +1071,10 @@ def process_copy_activity(profile: dict, activity: list):
                 record["reason"] = msg
                 log(f"[copy] SELL FAIL @{profile['username']} | {title[:35]} → {msg}")
 
-            state["copy_trades"].insert(0, record)
-            if len(state["copy_trades"]) > 200:
-                state["copy_trades"] = state["copy_trades"][:200]
+            _insert_copy_trade(record)
             continue
 
         # ── BUY ──────────────────────────────────────────────────────────────
-        # Skip if we already hold a copy position for this token
         if token_id in state["copy_positions"]:
             log(f"[copy] SKIP duplicado @{profile['username']} | {title[:35]} — ya tenemos posición")
             continue
@@ -874,17 +1089,13 @@ def process_copy_activity(profile: dict, activity: list):
         else:
             success, msg = execute_copy_trade(token_id, our_amount)
             if success:
-                state["copy_settings"]["spent_today"] = (
-                    state["copy_settings"].get("spent_today", 0.0) + our_amount
-                )
-                # Track this position so we can mirror the sell later
-                state["copy_positions"][token_id] = {
-                    "size":    our_amount,   # approximate; real size depends on fill price
-                    "market":  title[:60],
-                    "profile": profile["username"],
+                _add_spent(our_amount)
+                _upsert_copy_position(token_id, {
+                    "size":      our_amount,
+                    "market":    title[:60],
+                    "profile":   profile["username"],
                     "bought_at": time.time(),
-                }
-                save_config()
+                })
                 record["status"] = "executed"
                 log(f"[copy] BUY @{profile['username']} | {title[:35]} ${our_amount:.2f} ✓")
             else:
@@ -892,40 +1103,34 @@ def process_copy_activity(profile: dict, activity: list):
                 record["reason"] = msg
                 log(f"[copy] FAIL @{profile['username']} | {title[:35]} ${our_amount:.2f} → {msg}")
 
-        state["copy_trades"].insert(0, record)
-        if len(state["copy_trades"]) > 200:
-            state["copy_trades"] = state["copy_trades"][:200]
+        _insert_copy_trade(record)
 
 
 # ─── Copy Trading — Loop ─────────────────────────────────────────────────────
 
 def copy_trade_loop():
     log("[copy] Loop de copy trading iniciado.")
-    backoff: dict[str, tuple[float, float]] = {}  # addr -> (next_allowed_ts, current_delay)
-    portfolio_refresh: dict[str, float] = {}       # addr -> last_refresh_ts
+    backoff:           dict[str, tuple[float, float]] = {}
+    portfolio_refresh: dict[str, float]               = {}
 
     last_redeem_check = 0.0
     while state["copy_running"]:
-        # Check for redeemable positions every 30 s (also covered by bot_loop if running)
         now = time.time()
         if not state["bot_running"] and now - last_redeem_check > 30:
             check_and_redeem()
             last_redeem_check = now
 
         profiles = [p for p in state["copy_profiles"].values() if p.get("active", True)]
-        now = time.time()
+        now      = time.time()
 
         for i, profile in enumerate(profiles):
             if not state["copy_running"]:
                 break
 
             addr = profile["address"]
-
-            # Respect backoff
             if addr in backoff and now < backoff[addr][0]:
                 continue
 
-            # Stagger requests slightly between profiles
             if i > 0:
                 time.sleep(0.3)
 
@@ -934,7 +1139,6 @@ def copy_trade_loop():
                 process_copy_activity(profile, activity)
                 backoff.pop(addr, None)
 
-                # Refresh portfolio value every 60 seconds
                 last_refresh = portfolio_refresh.get(addr, 0)
                 if now - last_refresh > 60:
                     val = get_portfolio_value(addr)
@@ -946,7 +1150,7 @@ def copy_trade_loop():
             except RuntimeError as e:
                 if "RATE_LIMITED" in str(e):
                     prev_delay = backoff.get(addr, (0, 5))[1]
-                    delay = min(prev_delay * 2 if addr in backoff else 5, 60)
+                    delay      = min(prev_delay * 2 if addr in backoff else 5, 60)
                     backoff[addr] = (now + delay, delay)
                     log(f"[copy] Rate limit en @{profile['username']} — esperando {delay:.0f}s")
                 else:
@@ -973,9 +1177,9 @@ def api_get_config():
         creds["private_key"] = "••••••••"
     return jsonify(
         {
-            "credentials": creds,
+            "credentials":    creds,
             "has_private_key": bool(state["credentials"].get("private_key")),
-            "client_ready": state["client"] is not None,
+            "client_ready":   state["client"] is not None,
             "profit_targets": state["profit_targets"],
         }
     )
@@ -983,7 +1187,7 @@ def api_get_config():
 
 @app.route("/api/config", methods=["POST"])
 def api_set_config():
-    data = request.get_json(force=True)
+    data  = request.get_json(force=True)
     creds = data.get("credentials", {})
     for k, v in creds.items():
         if k == "private_key" and v == "••••••••":
@@ -996,18 +1200,18 @@ def api_set_config():
 
 @app.route("/api/positions", methods=["GET"])
 def api_positions():
-    raw = fetch_positions()
+    raw      = fetch_positions()
     enriched = enrich_positions(raw)
-    state["positions"] = enriched
+    state["positions"]   = enriched
     state["last_update"] = datetime.now().isoformat()
     return jsonify({"positions": enriched, "last_update": state["last_update"]})
 
 
 @app.route("/api/target", methods=["POST"])
 def api_set_target():
-    data = request.get_json(force=True)
+    data     = request.get_json(force=True)
     token_id = data.get("token_id")
-    target = data.get("target_pct")
+    target   = data.get("target_pct")
     if not token_id:
         return jsonify({"ok": False, "error": "token_id requerido"})
     if target is None or target == "":
@@ -1021,32 +1225,35 @@ def api_set_target():
 
 @app.route("/api/hide", methods=["POST"])
 def api_hide():
-    data = request.get_json(force=True)
+    data     = request.get_json(force=True)
     token_id = data.get("token_id")
-    hide = data.get("hide", True)
+    hide     = data.get("hide", True)
     if not token_id:
         return jsonify({"ok": False})
     if hide:
-        state["hidden_tokens"].add(token_id)
-        title   = data.get("title", "")
-        outcome = data.get("outcome", "")
-        size    = float(data.get("size", 0))
+        size      = float(data.get("size", 0))
         avg_price = float(data.get("avg_price", 0))
-        state["hidden_positions"][token_id] = {
-            "title": title, "outcome": outcome,
-            "size": size, "avg_price": avg_price,
-            "cost": round(size * avg_price, 2), "reason": "manual",
+        meta = {
+            "title":     data.get("title", ""),
+            "outcome":   data.get("outcome", ""),
+            "size":      size,
+            "avg_price": avg_price,
+            "cost":      round(size * avg_price, 2),
+            "reason":    "manual",
         }
+        _upsert_hidden(token_id, meta)
     else:
-        state["hidden_tokens"].discard(token_id)
-        state["hidden_positions"].pop(token_id, None)
-    save_config()
+        _delete_hidden(token_id)
     return jsonify({"ok": True})
 
 
 @app.route("/api/positions/closed", methods=["GET"])
 def api_closed_positions():
-    return jsonify(state["closed_positions"])
+    with _db_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM closed_positions ORDER BY id DESC LIMIT 500"
+        ).fetchall()
+    return jsonify([dict(r) for r in rows])
 
 
 @app.route("/api/positions/hidden", methods=["GET"])
@@ -1054,7 +1261,7 @@ def api_hidden_positions():
     result = []
     for token_id, meta in state["hidden_positions"].items():
         result.append({"token_id": token_id, **meta})
-    # Also include token_ids in hidden_tokens that lack metadata
+    # Include token_ids in hidden_tokens that may lack full metadata
     for token_id in state["hidden_tokens"]:
         if token_id not in state["hidden_positions"]:
             result.append({"token_id": token_id, "title": token_id[:30] + "…",
@@ -1064,7 +1271,7 @@ def api_hidden_positions():
 
 @app.route("/api/redeem", methods=["POST"])
 def api_redeem():
-    data = request.get_json(force=True)
+    data     = request.get_json(force=True)
     token_id = data.get("token_id")
     title    = data.get("title", "?")
     if not token_id:
@@ -1073,9 +1280,8 @@ def api_redeem():
         return jsonify({"ok": True, "msg": "Ya canjeado"})
     condition_id  = data.get("condition_id", "")
     outcome_index = int(data.get("outcome_index", -1))
-    ok, msg = redeem_position(token_id, title, condition_id, outcome_index)
+    ok, msg       = redeem_position(token_id, title, condition_id, outcome_index)
     if ok:
-        # Find position metadata for the record
         pos = next((p for p in state["positions"] if p["token_id"] == token_id), {})
         record_close(title, pos.get("outcome", ""), pos.get("size", 0),
                      pos.get("avg_price", 0), 1.0, "canjeada")
@@ -1084,15 +1290,15 @@ def api_redeem():
 
 @app.route("/api/sell", methods=["POST"])
 def api_sell():
-    data = request.get_json(force=True)
+    data     = request.get_json(force=True)
     token_id = data.get("token_id")
-    size = data.get("size")
-    price = data.get("price")
+    size     = data.get("size")
+    price    = data.get("price")
     if not token_id or not size:
         return jsonify({"ok": False, "error": "token_id y size requeridos"})
     size_f  = float(size)
     price_f = float(price) if price else 0.0
-    pos = next((p for p in state["positions"] if p["token_id"] == token_id), {})
+    pos     = next((p for p in state["positions"] if p["token_id"] == token_id), {})
     ok, msg = sell_position(token_id, size_f, price_f if price_f > 0 else None)
     if ok:
         if price_f > 0:
@@ -1123,11 +1329,11 @@ def api_session():
         pass
     sess = state["session"]
     return jsonify({
-        "balance":  round(balance_usdc, 2),
-        "profit":   sess["profit"],
-        "won":      sess["won"],
-        "lost":     sess["lost"],
-        "start":    sess["start"],
+        "balance": round(balance_usdc, 2),
+        "profit":  sess["profit"],
+        "won":     sess["won"],
+        "lost":    sess["lost"],
+        "start":   sess["start"],
     })
 
 
@@ -1154,10 +1360,10 @@ def api_bot_stop():
 def api_bot_status():
     return jsonify(
         {
-            "running": state["bot_running"],
+            "running":      state["bot_running"],
             "client_ready": state["client"] is not None,
-            "last_update": state.get("last_update"),
-            "logs": state["logs"][-30:],
+            "last_update":  state.get("last_update"),
+            "logs":         state["logs"][-30:],
         }
     )
 
@@ -1174,7 +1380,7 @@ def api_copy_profiles():
 @app.route("/api/copy/profiles", methods=["POST"])
 def api_copy_add_profile():
     data = request.get_json(force=True)
-    url = (data.get("url") or "").strip()
+    url  = (data.get("url") or "").strip()
     if not url:
         return jsonify({"ok": False, "error": "URL requerida"}), 400
 
@@ -1187,12 +1393,12 @@ def api_copy_add_profile():
         return jsonify({"ok": False, "error": f"@{username} ya está siendo seguido"}), 400
 
     state["copy_profiles"][address] = {
-        "url": url,
-        "username": username,
-        "address": address,
+        "url":             url,
+        "username":        username,
+        "address":         address,
         "portfolio_value": 0.0,
-        "last_seen_id": None,
-        "active": True,
+        "last_seen_id":    None,
+        "active":          True,
     }
 
     try:
@@ -1219,15 +1425,16 @@ def api_copy_remove_profile(address):
 
 @app.route("/api/copy/settings", methods=["GET"])
 def api_copy_get_settings():
-    s = state["copy_settings"]
+    s         = state["copy_settings"]
+    spent     = get_spent_today()
     remaining = get_remaining_budget()
     return jsonify(
         {
-            "mode": s.get("mode", "proportional"),
+            "mode":         s.get("mode", "proportional"),
             "fixed_amount": s.get("fixed_amount", 5.0),
             "daily_budget": s.get("daily_budget", 50.0),
-            "spent_today": round(s.get("spent_today", 0.0), 2),
-            "remaining": round(remaining, 2),
+            "spent_today":  round(spent, 2),
+            "remaining":    round(remaining, 2),
         }
     )
 
@@ -1235,7 +1442,7 @@ def api_copy_get_settings():
 @app.route("/api/copy/settings", methods=["PUT"])
 def api_copy_update_settings():
     data = request.get_json(force=True)
-    s = state["copy_settings"]
+    s    = state["copy_settings"]
 
     if "mode" in data:
         if data["mode"] not in ("proportional", "fixed"):
@@ -1258,12 +1465,20 @@ def api_copy_update_settings():
 
 @app.route("/api/copy/trades", methods=["GET"])
 def api_copy_trades():
-    return jsonify(state["copy_trades"][:50])
+    """Return last 50 copy trade records from DB."""
+    with _db_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM copy_trades_log ORDER BY id DESC LIMIT 50"
+        ).fetchall()
+    return jsonify([dict(r) for r in rows])
 
 
 @app.route("/api/copy/trades", methods=["DELETE"])
 def api_copy_clear_trades():
-    state["copy_trades"] = []
+    """Delete all copy trade log entries."""
+    with _db_lock:
+        with _db_conn() as conn:
+            conn.execute("DELETE FROM copy_trades_log")
     return jsonify({"ok": True})
 
 
@@ -1298,17 +1513,16 @@ def api_copy_diagnose():
         result["signer_address_error"] = str(e)
     try:
         from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
-        bal = client.get_balance_allowance(BalanceAllowanceParams(asset_type=AssetType.COLLATERAL))
+        bal   = client.get_balance_allowance(BalanceAllowanceParams(asset_type=AssetType.COLLATERAL))
         if hasattr(bal, "__dict__"):
             bal = bal.__dict__
-        usdc = int(bal.get("balance", 0)) / 1_000_000 if isinstance(bal, dict) else 0
+        usdc   = int(bal.get("balance", 0)) / 1_000_000 if isinstance(bal, dict) else 0
         result["usdc_balance"] = f"${usdc:.2f}"
-        result["allowances"] = bal.get("allowances", {}) if isinstance(bal, dict) else str(bal)
+        result["allowances"]   = bal.get("allowances", {}) if isinstance(bal, dict) else str(bal)
         usdc_ok = not any(int(v) == 0 for v in (bal.get("allowances", {}) or {}).values()) if isinstance(bal, dict) else False
     except Exception as e:
         result["balance_error"] = str(e)
         usdc_ok = False
-    # Check ERC1155 setApprovalForAll (needed for SELL orders)
     try:
         from web3 import Web3
         from web3.middleware import ExtraDataToPOAMiddleware
@@ -1320,7 +1534,7 @@ def api_copy_diagnose():
         ERC1155_ABI = [{"inputs":[{"name":"account","type":"address"},{"name":"operator","type":"address"}],
                         "name":"isApprovedForAll","outputs":[{"name":"","type":"bool"}],
                         "type":"function","stateMutability":"view"}]
-        w3 = Web3(Web3.HTTPProvider("https://polygon-bor-rpc.publicnode.com"))
+        w3   = Web3(Web3.HTTPProvider("https://polygon-bor-rpc.publicnode.com"))
         w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
         acct = Account.from_key(pk)
         ctf  = w3.eth.contract(address=CTF_ADDRESS, abi=ERC1155_ABI)
@@ -1332,7 +1546,7 @@ def api_copy_diagnose():
     except Exception as e:
         result["ctf_approve_check_error"] = str(e)
         sell_ok = False
-    result["needs_approval"] = not (usdc_ok and sell_ok)
+    result["needs_approval"]      = not (usdc_ok and sell_ok)
     result["needs_sell_approval"] = not sell_ok
     try:
         orders = client.get_orders()
@@ -1355,28 +1569,28 @@ def api_copy_approve():
 
         POLYGON_RPC       = "https://polygon-bor-rpc.publicnode.com"
         USDC_ADDRESS      = Web3.to_checksum_address("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174")
-        CTF_ADDRESS       = Web3.to_checksum_address("0x4D97DCd97eC945f40cF65F87097ACe5EA0476045")  # Conditional Tokens ERC1155
+        CTF_ADDRESS       = Web3.to_checksum_address("0x4D97DCd97eC945f40cF65F87097ACe5EA0476045")
         CTF_EXCHANGE      = Web3.to_checksum_address("0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E")
         NEG_RISK_EXCHANGE = Web3.to_checksum_address("0xC5d563A36AE78145C45a50134d48A1215220f80a")
-        NEG_RISK_ADAPTER  = Web3.to_checksum_address("0x4D97DCd97eC945f40cF65F87097ACe5EA0476045")  # same for setApprovalForAll
+        NEG_RISK_ADAPTER  = Web3.to_checksum_address("0x4D97DCd97eC945f40cF65F87097ACe5EA0476045")
 
         MAX_UINT256 = 2**256 - 1
 
-        ERC20_ABI = [{"inputs":[{"name":"spender","type":"address"},{"name":"amount","type":"uint256"}],
-                      "name":"approve","outputs":[{"name":"","type":"bool"}],"type":"function",
-                      "stateMutability":"nonpayable"}]
+        ERC20_ABI   = [{"inputs":[{"name":"spender","type":"address"},{"name":"amount","type":"uint256"}],
+                        "name":"approve","outputs":[{"name":"","type":"bool"}],"type":"function",
+                        "stateMutability":"nonpayable"}]
         ERC1155_ABI = [{"inputs":[{"name":"operator","type":"address"},{"name":"approved","type":"bool"}],
                         "name":"setApprovalForAll","outputs":[],"type":"function",
                         "stateMutability":"nonpayable"}]
 
-        w3 = Web3(Web3.HTTPProvider(POLYGON_RPC))
+        w3        = Web3(Web3.HTTPProvider(POLYGON_RPC))
         w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
-        acct  = Account.from_key(pk)
-        usdc  = w3.eth.contract(address=USDC_ADDRESS, abi=ERC20_ABI)
-        ctf   = w3.eth.contract(address=CTF_ADDRESS,  abi=ERC1155_ABI)
+        acct      = Account.from_key(pk)
+        usdc      = w3.eth.contract(address=USDC_ADDRESS, abi=ERC20_ABI)
+        ctf       = w3.eth.contract(address=CTF_ADDRESS,  abi=ERC1155_ABI)
 
-        txs   = []
-        nonce = w3.eth.get_transaction_count(acct.address, "pending")
+        txs       = []
+        nonce     = w3.eth.get_transaction_count(acct.address, "pending")
         gas_price = w3.eth.gas_price
 
         def send_tx(fn, label):
@@ -1393,16 +1607,11 @@ def api_copy_approve():
             txs.append({"label": label, "status": status, "tx": tx_hash.hex()})
             nonce += 1
 
-        # 1) USDC ERC20 approve → CTF Exchange (needed to BUY)
-        send_tx(usdc.functions.approve(CTF_EXCHANGE, MAX_UINT256),      "USDC→CTF_Exchange")
-        # 2) USDC ERC20 approve → Neg Risk CTF Exchange (needed to BUY neg-risk markets)
-        send_tx(usdc.functions.approve(NEG_RISK_EXCHANGE, MAX_UINT256), "USDC→NegRisk_Exchange")
-        # 3) Conditional Tokens ERC1155 setApprovalForAll → CTF Exchange (needed to SELL)
-        send_tx(ctf.functions.setApprovalForAll(CTF_EXCHANGE, True),      "CTF_tokens→CTF_Exchange")
-        # 4) Conditional Tokens ERC1155 setApprovalForAll → Neg Risk CTF Exchange (needed to SELL neg-risk)
-        send_tx(ctf.functions.setApprovalForAll(NEG_RISK_EXCHANGE, True), "CTF_tokens→NegRisk_Exchange")
+        send_tx(usdc.functions.approve(CTF_EXCHANGE, MAX_UINT256),       "USDC→CTF_Exchange")
+        send_tx(usdc.functions.approve(NEG_RISK_EXCHANGE, MAX_UINT256),  "USDC→NegRisk_Exchange")
+        send_tx(ctf.functions.setApprovalForAll(CTF_EXCHANGE, True),     "CTF_tokens→CTF_Exchange")
+        send_tx(ctf.functions.setApprovalForAll(NEG_RISK_EXCHANGE, True),"CTF_tokens→NegRisk_Exchange")
 
-        # Tell the CLOB to refresh its cache
         client = state.get("client")
         if client:
             from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
@@ -1420,13 +1629,14 @@ def api_copy_approve():
 
 @app.route("/api/copy/status", methods=["GET"])
 def api_copy_status():
-    s = state["copy_settings"]
+    s     = state["copy_settings"]
+    spent = get_spent_today()
     return jsonify(
         {
-            "running": state["copy_running"],
-            "profile_count": sum(1 for p in state["copy_profiles"].values() if p.get("active")),
-            "spent_today": round(s.get("spent_today", 0.0), 2),
-            "daily_budget": s.get("daily_budget", 50.0),
+            "running":          state["copy_running"],
+            "profile_count":    sum(1 for p in state["copy_profiles"].values() if p.get("active")),
+            "spent_today":      round(spent, 2),
+            "daily_budget":     s.get("daily_budget", 50.0),
             "remaining_budget": round(get_remaining_budget(), 2),
         }
     )
@@ -1435,7 +1645,9 @@ def api_copy_status():
 # ─── Arranque ─────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    load_config()
+    init_db()
+    migrate_from_json()
+    load_from_db()
     if state["credentials"].get("private_key"):
         init_client()
     print("Abriendo en http://localhost:5000")
