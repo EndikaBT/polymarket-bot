@@ -178,6 +178,29 @@
     .empty-state  { color: #6b7280; text-align: center; padding: 40px 0; }
     .spinner-mini { width: 14px; height: 14px; }
 
+    /* ── Session stats (navbar) ── */
+    .session-stat {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      line-height: 1.1;
+      padding: 2px 10px;
+      border-left: 1px solid var(--card-border);
+    }
+    .session-stat .stat-label {
+      font-size: 0.65rem;
+      color: #6b7280;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .session-stat .stat-value {
+      font-size: 0.85rem;
+      font-weight: 700;
+      color: #e5e7eb;
+    }
+    .stat-value.positive { color: var(--green); }
+    .stat-value.negative { color: var(--red); }
+
     /* ── Copy Trading ── */
     .copy-trade-log {
       background: #0b1120;
@@ -217,6 +240,19 @@
     </span>
   </div>
   <div class="d-flex align-items-center gap-2 ms-auto">
+    <!-- Session stats -->
+    <div class="session-stat">
+      <span class="stat-label">Balance</span>
+      <span class="stat-value" id="statBalance">—</span>
+    </div>
+    <div class="session-stat">
+      <span class="stat-label">Sesión P&amp;L</span>
+      <span class="stat-value" id="statPnl">—</span>
+    </div>
+    <div class="session-stat" style="border-right:1px solid var(--card-border); margin-right:4px;">
+      <span class="stat-label">W / L</span>
+      <span class="stat-value" id="statWL">—</span>
+    </div>
     <span id="lastUpdateLabel" class="text-secondary" style="font-size:.75rem"></span>
     <button class="btn btn-sm btn-outline-secondary" id="refreshBtn" title="Actualizar posiciones">
       <i class="bi bi-arrow-clockwise"></i>
@@ -310,6 +346,76 @@
                 Sin posiciones — configura tus credenciales y pulsa Actualizar
               </td>
             </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Hidden positions -->
+  <div class="card mb-3">
+    <div class="card-header d-flex align-items-center justify-content-between"
+         style="cursor:pointer" data-bs-toggle="collapse" data-bs-target="#hiddenPanel">
+      <span>
+        <i class="bi bi-eye-slash text-secondary me-1"></i>
+        Apuestas ocultas
+        <span id="hiddenCount" class="badge bg-secondary ms-1">0</span>
+      </span>
+      <i class="bi bi-chevron-down text-secondary"></i>
+    </div>
+    <div class="collapse" id="hiddenPanel">
+      <div class="table-responsive">
+        <table class="table table-sm table-borderless mb-0">
+          <thead>
+            <tr class="text-secondary" style="font-size:.75rem">
+              <th>Mercado</th>
+              <th>Outcome</th>
+              <th class="text-end">Cantidad</th>
+              <th class="text-end">Precio compra</th>
+              <th class="text-end">Coste</th>
+              <th class="text-end">Motivo</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="hiddenBody">
+            <tr><td colspan="7" class="empty-state text-secondary text-center py-3">Sin apuestas ocultas</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Historial de apuestas cerradas -->
+  <div class="card mb-3">
+    <div class="card-header d-flex align-items-center justify-content-between"
+         style="cursor:pointer" data-bs-toggle="collapse" data-bs-target="#closedPanel">
+      <span>
+        <i class="bi bi-trophy text-secondary me-1"></i>
+        Historial de apuestas
+        <span id="closedCount" class="badge bg-secondary ms-1">0</span>
+        <span id="closedTotalProfit" class="ms-2 small"></span>
+      </span>
+      <i class="bi bi-chevron-down text-secondary"></i>
+    </div>
+    <div class="collapse" id="closedPanel">
+      <div class="table-responsive">
+        <table class="table table-sm table-borderless mb-0">
+          <thead>
+            <tr class="text-secondary" style="font-size:.75rem">
+              <th>Fecha</th>
+              <th>Mercado</th>
+              <th>Outcome</th>
+              <th class="text-end">Cantidad</th>
+              <th class="text-end">Compra</th>
+              <th class="text-end">Cierre</th>
+              <th class="text-end">Coste</th>
+              <th class="text-end">Ingreso</th>
+              <th class="text-end">Beneficio</th>
+              <th class="text-end">Tipo</th>
+            </tr>
+          </thead>
+          <tbody id="closedBody">
+            <tr><td colspan="10" class="text-secondary text-center py-3">Sin historial aún</td></tr>
           </tbody>
         </table>
       </div>
@@ -570,7 +676,7 @@ function renderPositions(list) {
       actionHTML = '<span class="badge" style="background:rgba(34,197,94,.15);color:var(--green)"><i class="bi bi-check-circle-fill"></i> Vendido</span>';
     } else if (p.redeemable) {
       actionHTML = `<button class="btn btn-sm btn-outline-warning py-0 px-2"
-          onclick="redeemPosition('${escHtml(p.token_id)}','${escHtml(p.title)}')">
+          onclick="redeemPosition('${escHtml(p.token_id)}','${escHtml(p.title)}','${p.condition_id||''}',${p.outcome_index??-1})">
           <i class="bi bi-gift-fill"></i> Canjear
         </button>`;
     } else {
@@ -580,7 +686,7 @@ function renderPositions(list) {
          </button>`;
     }
     const hideBtn = `<button class="btn btn-sm btn-outline-secondary py-0 px-1" title="Ocultar esta posición"
-      onclick="hidePosition('${escHtml(p.token_id)}','${escHtml(p.title)}')">
+      onclick="hidePosition('${escHtml(p.token_id)}','${escHtml(p.title)}','${escHtml(p.outcome)}',${p.size},${p.avg_price})">
       <i class="bi bi-eye-slash"></i></button>`;
 
     return `<tr class="${rowClass}" data-token="${escHtml(p.token_id)}">
@@ -703,6 +809,101 @@ setInterval(updateBotStatus, 5000);
 // Polling de posiciones cada 5 s (el bot las actualiza cada 1 s)
 setInterval(loadPositions, 5000);
 
+// ── Posiciones ocultas ────────────────────────────────────────────────────
+async function loadHiddenPositions() {
+  try {
+    const r = await fetch('/api/positions/hidden');
+    const list = await r.json();
+    renderHiddenPositions(list);
+  } catch {}
+}
+
+function renderHiddenPositions(list) {
+  const tbody = document.getElementById('hiddenBody');
+  document.getElementById('hiddenCount').textContent = list.length;
+  if (!list.length) {
+    tbody.innerHTML = '<tr><td colspan="7" class="text-secondary text-center py-3">Sin apuestas ocultas</td></tr>';
+    return;
+  }
+  const reasonLabel = { perdida: '<span class="ct-failed">Perdida</span>', manual: '<span class="text-secondary">Manual</span>', '?': '<span class="text-secondary">—</span>' };
+  tbody.innerHTML = list.map(p => `
+    <tr>
+      <td class="text-light" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(p.title)}">${escHtml(p.title)}</td>
+      <td>${outcomeHTML(p.outcome)}</td>
+      <td class="text-end text-secondary">${p.size || '—'}</td>
+      <td class="text-end text-secondary">${p.avg_price ? fmtPrice(p.avg_price) : '—'}</td>
+      <td class="text-end text-secondary">${p.cost ? fmtUsdc(p.cost) : '—'}</td>
+      <td class="text-end">${reasonLabel[p.reason] || p.reason}</td>
+      <td class="text-end">
+        <button class="btn btn-sm btn-outline-secondary py-0 px-2" title="Mostrar de nuevo"
+          onclick="unhidePosition('${escHtml(p.token_id)}')">
+          <i class="bi bi-eye"></i>
+        </button>
+      </td>
+    </tr>`).join('');
+}
+
+async function unhidePosition(tokenId) {
+  await fetch('/api/hide', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ token_id: tokenId, hide: false })
+  });
+  loadPositions();
+  loadHiddenPositions();
+}
+
+setInterval(loadHiddenPositions, 10000);
+
+// ── Historial de apuestas cerradas ────────────────────────────────────────
+async function loadClosedPositions() {
+  try {
+    const r = await fetch('/api/positions/closed');
+    const list = await r.json();
+    renderClosedPositions(list);
+  } catch {}
+}
+
+function renderClosedPositions(list) {
+  const tbody = document.getElementById('closedBody');
+  document.getElementById('closedCount').textContent = list.length;
+
+  const totalProfit = list.reduce((s, p) => s + (p.profit || 0), 0);
+  const profitEl = document.getElementById('closedTotalProfit');
+  profitEl.textContent = `Total: ${totalProfit >= 0 ? '+' : ''}${fmtUsdc(totalProfit)}`;
+  profitEl.style.color = totalProfit >= 0 ? 'var(--green)' : 'var(--red)';
+
+  if (!list.length) {
+    tbody.innerHTML = '<tr><td colspan="10" class="text-secondary text-center py-3">Sin historial aún</td></tr>';
+    return;
+  }
+
+  const typeLabel = {
+    vendida:  '<span class="ct-executed">Vendida</span>',
+    canjeada: '<span style="color:var(--yellow)">Canjeada</span>',
+    perdida:  '<span class="ct-failed">Perdida</span>',
+  };
+
+  tbody.innerHTML = list.map(p => {
+    const profitClass = p.profit > 0 ? 'pnl-positive' : p.profit < 0 ? 'pnl-negative' : 'pnl-neutral';
+    const profitSign  = p.profit > 0 ? '+' : '';
+    return `<tr>
+      <td class="text-secondary" style="white-space:nowrap">${p.ts}</td>
+      <td class="text-light" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(p.title)}">${escHtml(p.title)}</td>
+      <td>${outcomeHTML(p.outcome)}</td>
+      <td class="text-end text-secondary">${p.size}</td>
+      <td class="text-end text-secondary">${fmtPrice(p.avg_price)}</td>
+      <td class="text-end text-secondary">${p.close_price ? fmtPrice(p.close_price) : '—'}</td>
+      <td class="text-end text-secondary">${fmtUsdc(p.cost)}</td>
+      <td class="text-end text-secondary">${p.type !== 'perdida' ? fmtUsdc(p.revenue) : '—'}</td>
+      <td class="text-end ${profitClass}">${profitSign}${fmtUsdc(p.profit)}</td>
+      <td class="text-end">${typeLabel[p.type] || p.type}</td>
+    </tr>`;
+  }).join('');
+}
+
+setInterval(loadClosedPositions, 15000);
+
 // ── Configuración ──────────────────────────────────────────────────────────
 async function loadConfig() {
   const r = await fetch('/api/config');
@@ -744,26 +945,27 @@ document.getElementById('configForm').addEventListener('submit', async e => {
 });
 
 // ── Ocultar posición ──────────────────────────────────────────────────────
-async function hidePosition(tokenId, title) {
-  if (!confirm(`¿Ocultar "${title.substring(0,60)}"?\nPuedes mostrarla de nuevo refrescando con Shift+click.`)) return;
+async function hidePosition(tokenId, title, outcome, size, avgPrice) {
+  if (!confirm(`¿Ocultar "${title.substring(0,60)}"?`)) return;
   await fetch('/api/hide', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ token_id: tokenId, hide: true })
+    body: JSON.stringify({ token_id: tokenId, hide: true, title, outcome, size, avg_price: avgPrice })
   });
   appendLogs([`[ocultar] "${title.substring(0,50)}" ocultada`]);
   loadPositions();
+  loadHiddenPositions();
 }
 
 // ── Modal de venta manual ─────────────────────────────────────────────────
-async function redeemPosition(tokenId, title) {
+async function redeemPosition(tokenId, title, conditionId, outcomeIndex) {
   if (!confirm(`¿Canjear "${title.substring(0,60)}"?\nSe enviará una transacción on-chain.`)) return;
   appendLogs([`[redeem] Canjeando: ${title.substring(0,50)}…`]);
   try {
     const r = await fetch('/api/redeem', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ token_id: tokenId, title })
+      body: JSON.stringify({ token_id: tokenId, title, condition_id: conditionId, outcome_index: outcomeIndex })
     });
     const d = await r.json();
     if (d.ok) {
@@ -834,6 +1036,8 @@ document.head.appendChild(style);
   await loadConfig();
   await updateBotStatus();
   await loadPositions();
+  await loadHiddenPositions();
+  await loadClosedPositions();
   await loadCopySettings();
   await loadCopyProfiles();
   await updateCopyStatus();
@@ -1075,6 +1279,32 @@ document.getElementById('clearCopyBtn').addEventListener('click', async () => {
 
 // Poll copy status every 3 s
 setInterval(updateCopyStatus, 3000);
+
+// ── Session stats (balance + W/L) ─────────────────────────────────────────
+async function loadSessionStats() {
+  try {
+    const r = await fetch('/api/session');
+    if (!r.ok) return;
+    const d = await r.json();
+
+    // Balance
+    document.getElementById('statBalance').textContent =
+      '$' + (d.balance ?? 0).toFixed(2);
+
+    // P&L
+    const pnl = d.profit ?? 0;
+    const pnlEl = document.getElementById('statPnl');
+    pnlEl.textContent = (pnl >= 0 ? '+$' : '-$') + Math.abs(pnl).toFixed(2);
+    pnlEl.className = 'stat-value ' + (pnl > 0 ? 'positive' : pnl < 0 ? 'negative' : '');
+
+    // W / L
+    document.getElementById('statWL').textContent =
+      (d.won ?? 0) + ' / ' + (d.lost ?? 0);
+  } catch {}
+}
+
+loadSessionStats();
+setInterval(loadSessionStats, 30000);
 </script>
 </body>
 </html>
