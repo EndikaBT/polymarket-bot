@@ -1472,6 +1472,49 @@ def api_hidden_positions():
     return jsonify(result)
 
 
+@app.route("/api/positions/hidden/<token_id>/check-trade", methods=["GET"])
+def api_hidden_check_trade(token_id):
+    """Check if there is any SELL or redemption trade for this token in the Data API."""
+    address = state["credentials"].get("address", "").strip()
+    if not address:
+        return jsonify({"ok": False, "error": "Dirección no configurada"})
+    try:
+        resp = requests.get(
+            f"{DATA_HOST}/trades",
+            params={"user": address.lower(), "limit": 100},
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            return jsonify({"ok": False, "error": f"Data API HTTP {resp.status_code}"})
+        trades = resp.json()
+        if not isinstance(trades, list):
+            trades = trades.get("trades", [])
+
+        for t in trades:
+            t_token = t.get("asset") or t.get("tokenId") or t.get("token_id") or ""
+            if t_token != token_id:
+                continue
+            side  = (t.get("side") or "").upper()
+            if side not in ("SELL", "REDEEM", "MERGE"):
+                continue
+            price  = float(t.get("price") or 0)
+            size   = float(t.get("size") or 0)
+            ts_raw = t.get("timestamp") or t.get("createdAt") or ""
+            return jsonify({
+                "ok":    True,
+                "found": True,
+                "side":  side,
+                "price": round(price, 4),
+                "size":  round(size, 4),
+                "ts":    str(ts_raw),
+                "usdc":  round(price * size, 2),
+            })
+
+        return jsonify({"ok": True, "found": False})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)})
+
+
 @app.route("/api/redeem", methods=["POST"])
 def api_redeem():
     data     = request.get_json(force=True)

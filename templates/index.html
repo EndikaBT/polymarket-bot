@@ -837,20 +837,53 @@ function renderHiddenPositions(list) {
   }
   const reasonLabel = { perdida: '<span class="ct-failed">Perdida</span>', manual: '<span class="text-secondary">Manual</span>', '?': '<span class="text-secondary">—</span>' };
   tbody.innerHTML = list.map(p => `
-    <tr>
+    <tr id="hidden-row-${escHtml(p.token_id)}">
       <td class="text-light" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(p.title)}">${escHtml(p.title)}</td>
       <td>${outcomeHTML(p.outcome)}</td>
       <td class="text-end text-secondary">${p.size || '—'}</td>
       <td class="text-end text-secondary">${p.avg_price ? fmtPrice(p.avg_price) : '—'}</td>
       <td class="text-end text-secondary">${p.cost ? fmtUsdc(p.cost) : '—'}</td>
-      <td class="text-end">${reasonLabel[p.reason] || p.reason}</td>
-      <td class="text-end">
+      <td class="text-end" id="hidden-trade-${escHtml(p.token_id)}">${reasonLabel[p.reason] || p.reason}</td>
+      <td class="text-end d-flex gap-1 justify-content-end">
+        <button class="btn btn-sm btn-outline-info py-0 px-2" title="Buscar venta/canje real en blockchain"
+          onclick="checkHiddenTrade('${escHtml(p.token_id)}', this)">🔍</button>
         <button class="btn btn-sm btn-outline-secondary py-0 px-2" title="Mostrar de nuevo"
           onclick="unhidePosition('${escHtml(p.token_id)}')">
           <i class="bi bi-eye"></i>
         </button>
       </td>
     </tr>`).join('');
+}
+
+async function checkHiddenTrade(tokenId, btn) {
+  btn.disabled = true;
+  btn.textContent = '…';
+  try {
+    const r = await fetch(`/api/positions/hidden/${encodeURIComponent(tokenId)}/check-trade`);
+    const d = await r.json();
+    const cell = document.getElementById(`hidden-trade-${tokenId}`);
+    if (!d.ok) {
+      if (cell) cell.innerHTML += ` <span class="text-danger small" title="${escHtml(d.error)}">✗</span>`;
+      btn.textContent = '✗';
+      return;
+    }
+    if (d.found) {
+      const color  = d.price >= 0.5 ? 'var(--green)' : 'var(--yellow)';
+      const label  = d.side === 'SELL' ? 'Vendida' : d.side === 'REDEEM' ? 'Canjeada' : d.side;
+      if (cell) cell.innerHTML =
+        `<span style="color:${color}" title="${label} a ${d.price} × ${d.size} = $${d.usdc}">
+           ${label}: $${d.usdc.toFixed(2)} @ ${d.price}
+         </span>`;
+      btn.remove();
+    } else {
+      if (cell) cell.innerHTML += ' <span class="text-secondary small" title="Sin trades encontrados en la API">sin trades</span>';
+      btn.textContent = '—';
+      btn.disabled = false;
+    }
+  } catch (e) {
+    btn.textContent = '✗';
+    btn.disabled = false;
+  }
 }
 
 async function unhidePosition(tokenId) {
