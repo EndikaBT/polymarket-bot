@@ -102,7 +102,9 @@ def init_db():
                     cost        REAL,
                     revenue     REAL,
                     profit      REAL,
-                    type        TEXT
+                    type        TEXT,
+                    token_id    TEXT,
+                    price_verified INTEGER DEFAULT 0
                 );
 
                 CREATE TABLE IF NOT EXISTS copy_trades_log (
@@ -139,6 +141,15 @@ def init_db():
                     token_id TEXT PRIMARY KEY
                 );
             """)
+        # Add columns to existing DBs that predate this schema version
+        for col, definition in [
+            ("token_id",       "TEXT"),
+            ("price_verified", "INTEGER DEFAULT 0"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE closed_positions ADD COLUMN {col} {definition}")
+            except Exception:
+                pass  # column already exists
 
 
 # ─── DB write helpers (always use _db_lock) ───────────────────────────────────
@@ -817,7 +828,7 @@ def bot_loop():
                         fill = fetch_fill_price(token_id, sell_ts) or pos["current_price"]
                         credit_budget(pos["size"], fill)
                         record_close(pos["title"], pos["outcome"], pos["size"],
-                                     pos["avg_price"], fill, "vendida")
+                                     pos["avg_price"], fill, "vendida", token_id)
                     else:
                         log(f"Error al vender posición resuelta: {msg}")
                     continue
@@ -846,7 +857,7 @@ def bot_loop():
                         credit_budget(pos["size"], fill)
                         avg = pos["avg_price"] or state["avg_price_cache"].get(pos["token_id"], 0)
                         record_close(pos["title"], pos["outcome"], pos["size"],
-                                     avg, fill, "vendida")
+                                     avg, fill, "vendida", pos["token_id"])
                     else:
                         log(f"Error al vender automáticamente: {msg}")
         except Exception as e:
@@ -983,7 +994,7 @@ TAKER_FEE = 0.02
 
 
 def record_close(title: str, outcome: str, size: float, avg_price: float,
-                 close_price: float, close_type: str):
+                 close_price: float, close_type: str, token_id: str = ""):
     """Write a closed position to the DB and update session stats."""
     cost    = round(size * avg_price, 2)
     revenue = round(
@@ -995,11 +1006,11 @@ def record_close(title: str, outcome: str, size: float, avg_price: float,
         with _db_conn() as conn:
             conn.execute(
                 "INSERT INTO closed_positions "
-                "(ts, title, outcome, size, avg_price, close_price, cost, revenue, profit, type) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                "(ts, title, outcome, size, avg_price, close_price, cost, revenue, profit, type, token_id) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (datetime.now().strftime("%Y-%m-%d %H:%M"), title, outcome,
                  round(size, 4), round(avg_price, 4), round(close_price, 4),
-                 cost, revenue, profit, close_type)
+                 cost, revenue, profit, close_type, token_id)
             )
     sess = state["session"]
     sess["profit"] = round(sess["profit"] + profit, 2)
@@ -1363,6 +1374,91 @@ def api_closed_positions():
     return jsonify([dict(r) for r in rows])
 
 
+@app.route("/api/positions/closed/<int:row_id>/verify", methods=["POST"])
+def api_verify_close_price(row_id):
+    """Fetch the actual fill price from the Data API and update the DB row."""
+    with _db_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM closed_positions WHERE id=?", (row_id,)
+        ).fetchone()
+    if not row:
+        return jsonify({"ok": False, "error": "Registro no encontrado"})
+
+    row = dict(row)
+    token_id = row.get("token_id", "")
+    if not token_id:
+        return jsonify({"ok": False, "error": "No hay token_id — venta registrada antes de este fix"})
+
+    # Parse ts to unix timestamp for fetch_fill_price
+    try:
+        ts_dt = datetime.strptime(row["ts"], "%Y-%m-%d %H:%M")
+        min_ts = ts_dt.timestamp() - 120   # allow 2 min before recorded ts
+    except Exception:
+        min_ts = 0.0
+
+    address = state["credentials"].get("address", "").strip()
+    fill_price = 0.0
+    try:
+        resp = requests.get(
+            f"{DATA_HOST}/trades",
+            params={"user": address.lower(), "limit": 50},
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            trades = resp.json()
+            if not isinstance(trades, list):
+                trades = trades.get("trades", [])
+            for t in trades:
+                t_token = t.get("asset") or t.get("tokenId") or t.get("token_id") or ""
+                if t_token != token_id:
+                    continue
+                if (t.get("side") or "").upper() != "SELL":
+                    continue
+                ts_raw = t.get("timestamp") or t.get("createdAt") or ""
+                try:
+                    t_ts = datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00")).timestamp()
+                except Exception:
+                    try:
+                        t_ts = float(ts_raw)
+                    except Exception:
+                        t_ts = 0.0
+                if t_ts < min_ts:
+                    continue
+                price = float(t.get("price") or 0)
+                if price > 0:
+                    fill_price = price
+                    break
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)})
+
+    if fill_price <= 0:
+        return jsonify({"ok": False, "error": "No se encontró el trade en la Data API"})
+
+    size      = float(row["size"])
+    avg_price = float(row["avg_price"] or 0)
+    close_type = row["type"]
+    cost      = round(size * avg_price, 2)
+    revenue   = round(size * fill_price * (1 - TAKER_FEE) if close_type != "canjeada" else size * fill_price, 2)
+    profit    = round(revenue - cost, 2)
+
+    with _db_lock:
+        with _db_conn() as conn:
+            conn.execute(
+                "UPDATE closed_positions SET close_price=?, cost=?, revenue=?, profit=?, price_verified=1 WHERE id=?",
+                (round(fill_price, 4), cost, revenue, profit, row_id)
+            )
+
+    log(f"[verify] Precio verificado para '{row['title'][:40]}': {row['close_price']:.4f} → {fill_price:.4f}")
+    return jsonify({
+        "ok":           True,
+        "close_price":  round(fill_price, 4),
+        "cost":         cost,
+        "revenue":      revenue,
+        "profit":       profit,
+        "price_verified": True,
+    })
+
+
 @app.route("/api/positions/hidden", methods=["GET"])
 def api_hidden_positions():
     result = []
@@ -1414,7 +1510,7 @@ def api_sell():
         if fill > 0:
             credit_budget(size_f, fill)
         record_close(pos.get("title", token_id[:30]), pos.get("outcome", ""),
-                     size_f, pos.get("avg_price", 0), fill or price_f, "vendida")
+                     size_f, pos.get("avg_price", 0), fill or price_f, "vendida", token_id)
     return jsonify({"ok": ok, "error": msg if not ok else ""})
 
 
