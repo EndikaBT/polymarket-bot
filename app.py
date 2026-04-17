@@ -788,7 +788,7 @@ def check_and_redeem():
                                       pos.get("outcome_index", -1))
             if ok:
                 record_close(pos["title"], pos.get("outcome", ""),
-                             pos.get("size", 0), pos.get("avg_price", 0),
+                             pos.get("size", 0), pos.get("avg_price") or 0,
                              1.0, "canjeada")
         finally:
             state["_redeeming"] = False
@@ -996,6 +996,9 @@ TAKER_FEE = 0.02
 def record_close(title: str, outcome: str, size: float, avg_price: float,
                  close_price: float, close_type: str, token_id: str = ""):
     """Write a closed position to the DB and update session stats."""
+    avg_price  = float(avg_price  or 0)   # guard against None from unreliable API data
+    close_price = float(close_price or 0)
+    size        = float(size       or 0)
     cost    = round(size * avg_price, 2)
     revenue = round(
         size * close_price * (1 - TAKER_FEE) if close_type != "canjeada" else size * close_price,
@@ -1530,7 +1533,7 @@ def api_redeem():
     if ok:
         pos = next((p for p in state["positions"] if p["token_id"] == token_id), {})
         record_close(title, pos.get("outcome", ""), pos.get("size", 0),
-                     pos.get("avg_price", 0), 1.0, "canjeada")
+                     pos.get("avg_price") or 0, 1.0, "canjeada")
     return jsonify({"ok": ok, "error": msg if not ok else "", "tx": msg if ok else ""})
 
 
@@ -1553,7 +1556,7 @@ def api_sell():
         if fill > 0:
             credit_budget(size_f, fill)
         record_close(pos.get("title", token_id[:30]), pos.get("outcome", ""),
-                     size_f, pos.get("avg_price", 0), fill or price_f, "vendida", token_id)
+                     size_f, pos.get("avg_price") or 0, fill or price_f, "vendida", token_id)
     return jsonify({"ok": ok, "error": msg if not ok else ""})
 
 
@@ -1605,12 +1608,21 @@ def api_session():
 
 @app.route("/api/stats", methods=["GET"])
 def api_stats():
+    balance = _fetch_usdc_balance()
+    # Sum current market value of all open positions
+    open_value = sum(
+        p.get("value", 0) or 0
+        for p in state.get("positions", [])
+        if not p.get("sold")
+    )
     return jsonify({
-        "balance": round(_fetch_usdc_balance(), 2),
-        "daily":   _pnl_for_period("date(ts) = date('now')"),
-        "weekly":  _pnl_for_period("ts >= date('now', '-6 days')"),
-        "monthly": _pnl_for_period("strftime('%Y-%m', ts) = strftime('%Y-%m', 'now')"),
-        "all_time": _pnl_for_period(""),
+        "balance":    round(balance, 2),
+        "open_value": round(open_value, 2),
+        "total":      round(balance + open_value, 2),
+        "daily":      _pnl_for_period("date(ts) = date('now')"),
+        "weekly":     _pnl_for_period("ts >= date('now', '-6 days')"),
+        "monthly":    _pnl_for_period("strftime('%Y-%m', ts) = strftime('%Y-%m', 'now')"),
+        "all_time":   _pnl_for_period(""),
     })
 
 

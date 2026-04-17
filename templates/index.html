@@ -241,6 +241,10 @@
   </div>
   <div class="d-flex align-items-center gap-2 ms-auto">
     <!-- Session stats -->
+    <div class="session-stat" id="pill-total" title="Balance USDC + valor de posiciones abiertas">
+      <span class="stat-label">Portfolio</span>
+      <span class="stat-value" id="statTotal">—</span>
+    </div>
     <div class="session-stat">
       <span class="stat-label">Balance</span>
       <span class="stat-value" id="statBalance">—</span>
@@ -1388,6 +1392,10 @@ async function loadSessionStats() {
     const d = await r.json();
 
     document.getElementById('statBalance').textContent = '$' + (d.balance ?? 0).toFixed(2);
+    const totalEl = document.getElementById('statTotal');
+    totalEl.textContent = '$' + (d.total ?? 0).toFixed(2);
+    document.getElementById('pill-total').title =
+      `Balance USDC: $${(d.balance??0).toFixed(2)} + Apuestas abiertas: $${(d.open_value??0).toFixed(2)}`;
     applyPnl('statDaily',   'pill-daily',   d.daily   ?? {});
     applyPnl('statWeekly',  'pill-weekly',  d.weekly  ?? {});
     applyPnl('statMonthly', 'pill-monthly', d.monthly ?? {});
