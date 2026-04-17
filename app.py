@@ -36,6 +36,7 @@ state = {
     "last_update": None,
     "sold_tokens": set(),
     "redeemed_tokens": set(),
+    "avg_price_cache": {},  # token_id -> float: first reliable avgPrice seen, never overwritten with suspicious values
     "hidden_tokens": set(),
     "hidden_positions": {},  # token_id -> {title, outcome, size, avg_price, cost, reason}
     # closed_positions and copy_trades removed — live in DB
@@ -472,8 +473,23 @@ def enrich_positions(raw_positions: list) -> list:
             raw.get("token_id") or raw.get("conditionId") or ""
         )
         size          = float(raw.get("size") or 0)
-        avg_price     = float(raw.get("avgPrice") or raw.get("averagePrice") or 0)
+        avg_price_api = float(raw.get("avgPrice") or raw.get("averagePrice") or 0)
         cur_price_api = float(raw.get("curPrice") or 0)
+
+        # ── avgPrice reliability cache ────────────────────────────────────────
+        # The Data API sometimes returns avgPrice ≈ 0 or wildly wrong values
+        # (sync lag after a buy). We keep the highest reliable value we've ever
+        # seen per token so P&L doesn't swing between -50% and +450%.
+        #
+        # "Reliable" = avg_price_api >= 0.01.  We update the cache only when the
+        # new API value is higher than what we have cached (a lower value is more
+        # likely to be a sync artefact than a genuine price change).
+        cache = state["avg_price_cache"]
+        if avg_price_api >= 0.01:
+            if avg_price_api > cache.get(token_id, 0.0):
+                cache[token_id] = avg_price_api
+        avg_price         = cache.get(token_id, avg_price_api)
+        avg_price_reliable = avg_price >= 0.01
         redeemable    = bool(raw.get("redeemable", False))
         condition_id  = raw.get("conditionId", "")
         outcome_index = int(raw.get("outcomeIndex", 0))
@@ -542,12 +558,16 @@ def enrich_positions(raw_positions: list) -> list:
             save_config()
             continue
 
-        pnl_pct = ((current - avg_price) / avg_price * 100) if avg_price > 0 else 0.0
+        # Only compute P&L when avgPrice is reliable; otherwise show null
+        if avg_price_reliable and avg_price > 0:
+            pnl_pct = (current - avg_price) / avg_price * 100
+        else:
+            pnl_pct = None
 
         TAKER_FEE  = 0.02
-        cost       = round(size * avg_price, 2)
+        cost       = round(size * avg_price, 2) if avg_price_reliable else None
         sell_value = round(size * current * (1 - TAKER_FEE), 2)
-        net_profit = round(sell_value - cost, 2)
+        net_profit = round(sell_value - cost, 2) if cost is not None else None
 
         target           = state["profit_targets"].get(token_id)
         already_sold     = token_id in state["sold_tokens"]
@@ -557,23 +577,24 @@ def enrich_positions(raw_positions: list) -> list:
 
         result.append(
             {
-                "token_id":        token_id,
-                "title":           title,
-                "outcome":         outcome,
-                "size":            round(size, 4),
-                "avg_price":       round(avg_price, 4),
-                "current_price":   round(current, 4),
-                "value":           round(size * current, 2),
-                "cost":            cost,
-                "sell_value":      sell_value,
-                "net_profit":      net_profit,
-                "pnl_pct":         round(pnl_pct, 2),
-                "target_pct":      target,
-                "redeemable":      redeemable,
-                "condition_id":    condition_id,
-                "outcome_index":   outcome_index,
-                "auto_sell_active": target is not None and not already_sold,
-                "sold":            already_sold,
+                "token_id":          token_id,
+                "title":             title,
+                "outcome":           outcome,
+                "size":              round(size, 4),
+                "avg_price":         round(avg_price, 4) if avg_price_reliable else None,
+                "avg_price_reliable": avg_price_reliable,
+                "current_price":     round(current, 4),
+                "value":             round(size * current, 2),
+                "cost":              cost,
+                "sell_value":        sell_value,
+                "net_profit":        net_profit,
+                "pnl_pct":           round(pnl_pct, 2) if pnl_pct is not None else None,
+                "target_pct":        target,
+                "redeemable":        redeemable,
+                "condition_id":      condition_id,
+                "outcome_index":     outcome_index,
+                "auto_sell_active":  target is not None and not already_sold and avg_price_reliable,
+                "sold":              already_sold,
             }
         )
     return result
@@ -813,7 +834,7 @@ def bot_loop():
                     save_config()
                     log(f"[bot] Objetivo asignado: {pos['title'][:40]} → {auto_target}%")
                 target = pos.get("target_pct")
-                if target is not None and pos["pnl_pct"] >= target:
+                if target is not None and pos["pnl_pct"] is not None and pos["pnl_pct"] >= target:
                     log(
                         f"Objetivo alcanzado: {pos['title'][:40]} — "
                         f"P&L {pos['pnl_pct']:.1f}% ≥ {target}% → vendiendo…"
@@ -823,8 +844,9 @@ def bot_loop():
                     if ok:
                         fill = fetch_fill_price(pos["token_id"], sell_ts) or pos["current_price"]
                         credit_budget(pos["size"], fill)
+                        avg = pos["avg_price"] or state["avg_price_cache"].get(pos["token_id"], 0)
                         record_close(pos["title"], pos["outcome"], pos["size"],
-                                     pos["avg_price"], fill, "vendida")
+                                     avg, fill, "vendida")
                     else:
                         log(f"Error al vender automáticamente: {msg}")
         except Exception as e:

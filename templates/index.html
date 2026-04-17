@@ -604,13 +604,15 @@ let targetSaveTimers = {};
 
 // ── Utils ──────────────────────────────────────────────────────────────────
 function fmtPct(v) {
+  if (v == null) return '<span class="text-warning" title="Precio de compra aún sincronizando con la API — P&amp;L no disponible">⚠ sincronizando</span>';
   const sign = v >= 0 ? '+' : '';
   return `${sign}${v.toFixed(2)}%`;
 }
-function fmtPrice(v) { return v.toFixed(4); }
-function fmtUsdc(v)  { return '$' + v.toFixed(2); }
+function fmtPrice(v) { return v != null ? v.toFixed(4) : '—'; }
+function fmtUsdc(v)  { return v != null ? '$' + v.toFixed(2) : '—'; }
 
 function pnlClass(v) {
+  if (v == null) return 'pnl-neutral';
   if (v > 0)  return 'pnl-positive';
   if (v < 0)  return 'pnl-negative';
   return 'pnl-neutral';
