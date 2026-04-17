@@ -586,6 +586,14 @@ def enrich_positions(raw_positions: list) -> list:
         if already_redeemed:
             continue
 
+        # Fecha de apertura — disponible para copytrades
+        copy_entry = state["copy_positions"].get(token_id)
+        bought_at_ts = copy_entry.get("bought_at") if copy_entry else None
+        opened_at = (
+            datetime.fromtimestamp(bought_at_ts).strftime("%Y-%m-%d %H:%M")
+            if bought_at_ts else None
+        )
+
         result.append(
             {
                 "token_id":          token_id,
@@ -606,6 +614,7 @@ def enrich_positions(raw_positions: list) -> list:
                 "outcome_index":     outcome_index,
                 "auto_sell_active":  target is not None and not already_sold and avg_price_reliable,
                 "sold":              already_sold,
+                "opened_at":         opened_at,
             }
         )
     return result
@@ -787,9 +796,12 @@ def check_and_redeem():
                                       pos.get("condition_id", ""),
                                       pos.get("outcome_index", -1))
             if ok:
+                # Use avg_price_cache as fallback when pos["avg_price"] is None
+                avg_p = pos.get("avg_price") or state["avg_price_cache"].get(token_id, 0)
                 record_close(pos["title"], pos.get("outcome", ""),
-                             pos.get("size", 0), pos.get("avg_price") or 0,
-                             1.0, "canjeada")
+                             pos.get("size", 0), avg_p,
+                             1.0, "canjeada", token_id)
+                log(f"[redeem] ✓ Registrado en historial: {pos['title'][:45]}")
         finally:
             state["_redeeming"] = False
         break  # one per call — next cycle handles the rest
