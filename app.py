@@ -3,16 +3,73 @@ import math
 import os
 import random
 import re
+import secrets
 import sqlite3
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
+from functools import wraps
 
 import requests
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, redirect, render_template, request, session, url_for
+from werkzeug.security import check_password_hash, generate_password_hash
 
 app = Flask(__name__)
+
+# ─── Auth helpers ─────────────────────────────────────────────────────────────
+
+_login_lock     = threading.Lock()
+_login_attempts: dict = {}   # ip -> [timestamp, ...]
+MAX_ATTEMPTS    = 5
+LOCKOUT_SECONDS = 15 * 60   # 15 min
+
+
+def _get_or_create_secret_key() -> str:
+    """Load secret key from DB, or generate + store one on first run."""
+    with _db_conn() as conn:
+        row = conn.execute("SELECT value FROM kv WHERE key='secret_key'").fetchone()
+    if row:
+        return row["value"]
+    key = secrets.token_hex(32)
+    with _db_lock:
+        with _db_conn() as conn:
+            conn.execute("INSERT OR IGNORE INTO kv VALUES ('secret_key', ?)", (key,))
+    return key
+
+
+def _rate_limit_check(ip: str) -> tuple:
+    """Returns (allowed: bool, wait_seconds: int)."""
+    now = time.time()
+    with _login_lock:
+        ts = [t for t in _login_attempts.get(ip, []) if now - t < LOCKOUT_SECONDS]
+        _login_attempts[ip] = ts
+        if len(ts) >= MAX_ATTEMPTS:
+            return False, int(LOCKOUT_SECONDS - (now - ts[0]))
+        return True, 0
+
+
+def _record_failed(ip: str):
+    with _login_lock:
+        _login_attempts.setdefault(ip, []).append(time.time())
+
+
+def _clear_attempts(ip: str):
+    with _login_lock:
+        _login_attempts.pop(ip, None)
+
+
+@app.before_request
+def check_auth():
+    """Redirect unauthenticated requests to /login. API routes get 401."""
+    public = {"login", "logout", "static"}
+    if request.endpoint in public:
+        return
+    if not session.get("authenticated"):
+        if request.path.startswith("/api/"):
+            return jsonify({"ok": False, "error": "No autenticado"}), 401
+        return redirect(url_for("login"))
+
 
 # ─── Paths ────────────────────────────────────────────────────────────────────
 
@@ -2019,6 +2076,60 @@ def api_copy_status():
     )
 
 
+# ─── Auth routes ──────────────────────────────────────────────────────────────
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    with _db_conn() as conn:
+        row = conn.execute("SELECT value FROM kv WHERE key='password_hash'").fetchone()
+    has_password = row is not None
+    error = None
+
+    if request.method == "POST":
+        ip = request.remote_addr or "unknown"
+
+        if not has_password:
+            # First-run setup
+            pw  = request.form.get("password", "")
+            pw2 = request.form.get("password2", "")
+            if len(pw) < 8:
+                error = "La contraseña debe tener mínimo 8 caracteres"
+            elif pw != pw2:
+                error = "Las contraseñas no coinciden"
+            else:
+                h = generate_password_hash(pw)
+                with _db_lock:
+                    with _db_conn() as conn:
+                        conn.execute("INSERT OR REPLACE INTO kv VALUES ('password_hash', ?)", (h,))
+                session["authenticated"] = True
+                session.permanent = True
+                return redirect(url_for("index"))
+        else:
+            allowed, wait = _rate_limit_check(ip)
+            if not allowed:
+                m, s = divmod(wait, 60)
+                error = f"Demasiados intentos. Espera {m}m {s}s"
+            else:
+                pw = request.form.get("password", "")
+                if check_password_hash(row["value"], pw):
+                    _clear_attempts(ip)
+                    session["authenticated"] = True
+                    session.permanent = True
+                    return redirect(url_for("index"))
+                else:
+                    _record_failed(ip)
+                    remaining = MAX_ATTEMPTS - len(_login_attempts.get(ip, []))
+                    error = f"Contraseña incorrecta — {max(0, remaining)} intentos restantes"
+
+    return render_template("login.html", has_password=has_password, error=error)
+
+
+@app.route("/logout", methods=["POST"])
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
+
+
 # ─── Arranque ─────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
@@ -2027,5 +2138,7 @@ if __name__ == "__main__":
     load_from_db()
     if state["credentials"].get("private_key"):
         init_client()
+    app.secret_key = _get_or_create_secret_key()
+    app.permanent_session_lifetime = timedelta(hours=12)
     print("Abriendo en http://localhost:5000")
-    app.run(host="127.0.0.1", port=5000, debug=False, use_reloader=False, threaded=True)
+    app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False, threaded=True)
