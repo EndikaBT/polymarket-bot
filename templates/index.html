@@ -241,6 +241,10 @@
   </div>
   <div class="d-flex align-items-center gap-2 ms-auto">
     <!-- Session stats -->
+    <div class="session-stat" id="pill-total" title="Balance USDC + valor de posiciones abiertas">
+      <span class="stat-label">Portfolio</span>
+      <span class="stat-value" id="statTotal">—</span>
+    </div>
     <div class="session-stat">
       <span class="stat-label">Balance</span>
       <span class="stat-value" id="statBalance">—</span>
@@ -604,13 +608,15 @@ let targetSaveTimers = {};
 
 // ── Utils ──────────────────────────────────────────────────────────────────
 function fmtPct(v) {
+  if (v == null) return '<span class="text-warning" title="Precio de compra aún sincronizando con la API — P&amp;L no disponible">⚠ sincronizando</span>';
   const sign = v >= 0 ? '+' : '';
   return `${sign}${v.toFixed(2)}%`;
 }
-function fmtPrice(v) { return v.toFixed(4); }
-function fmtUsdc(v)  { return '$' + v.toFixed(2); }
+function fmtPrice(v) { return v != null ? v.toFixed(4) : '—'; }
+function fmtUsdc(v)  { return v != null ? '$' + v.toFixed(2) : '—'; }
 
 function pnlClass(v) {
+  if (v == null) return 'pnl-neutral';
   if (v > 0)  return 'pnl-positive';
   if (v < 0)  return 'pnl-negative';
   return 'pnl-neutral';
@@ -835,20 +841,53 @@ function renderHiddenPositions(list) {
   }
   const reasonLabel = { perdida: '<span class="ct-failed">Perdida</span>', manual: '<span class="text-secondary">Manual</span>', '?': '<span class="text-secondary">—</span>' };
   tbody.innerHTML = list.map(p => `
-    <tr>
+    <tr id="hidden-row-${escHtml(p.token_id)}">
       <td class="text-light" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(p.title)}">${escHtml(p.title)}</td>
       <td>${outcomeHTML(p.outcome)}</td>
       <td class="text-end text-secondary">${p.size || '—'}</td>
       <td class="text-end text-secondary">${p.avg_price ? fmtPrice(p.avg_price) : '—'}</td>
       <td class="text-end text-secondary">${p.cost ? fmtUsdc(p.cost) : '—'}</td>
-      <td class="text-end">${reasonLabel[p.reason] || p.reason}</td>
-      <td class="text-end">
+      <td class="text-end" id="hidden-trade-${escHtml(p.token_id)}">${reasonLabel[p.reason] || p.reason}</td>
+      <td class="text-end d-flex gap-1 justify-content-end">
+        <button class="btn btn-sm btn-outline-info py-0 px-2" title="Buscar venta/canje real en blockchain"
+          onclick="checkHiddenTrade('${escHtml(p.token_id)}', this)">🔍</button>
         <button class="btn btn-sm btn-outline-secondary py-0 px-2" title="Mostrar de nuevo"
           onclick="unhidePosition('${escHtml(p.token_id)}')">
           <i class="bi bi-eye"></i>
         </button>
       </td>
     </tr>`).join('');
+}
+
+async function checkHiddenTrade(tokenId, btn) {
+  btn.disabled = true;
+  btn.textContent = '…';
+  try {
+    const r = await fetch(`/api/positions/hidden/${encodeURIComponent(tokenId)}/check-trade`);
+    const d = await r.json();
+    const cell = document.getElementById(`hidden-trade-${tokenId}`);
+    if (!d.ok) {
+      if (cell) cell.innerHTML += ` <span class="text-danger small" title="${escHtml(d.error)}">✗</span>`;
+      btn.textContent = '✗';
+      return;
+    }
+    if (d.found) {
+      const color  = d.price >= 0.5 ? 'var(--green)' : 'var(--yellow)';
+      const label  = d.side === 'SELL' ? 'Vendida' : d.side === 'REDEEM' ? 'Canjeada' : d.side;
+      if (cell) cell.innerHTML =
+        `<span style="color:${color}" title="${label} a ${d.price} × ${d.size} = $${d.usdc}">
+           ${label}: $${d.usdc.toFixed(2)} @ ${d.price}
+         </span>`;
+      btn.remove();
+    } else {
+      if (cell) cell.innerHTML += ' <span class="text-secondary small" title="Sin trades encontrados en la API">sin trades</span>';
+      btn.textContent = '—';
+      btn.disabled = false;
+    }
+  } catch (e) {
+    btn.textContent = '✗';
+    btn.disabled = false;
+  }
 }
 
 async function unhidePosition(tokenId) {
@@ -887,27 +926,71 @@ function renderClosedPositions(list) {
   }
 
   const typeLabel = {
-    vendida:  '<span class="ct-executed">Vendida</span>',
-    canjeada: '<span style="color:var(--yellow)">Canjeada</span>',
-    perdida:  '<span class="ct-failed">Perdida</span>',
+    vendida:    '<span class="ct-executed">Vendida</span>',
+    canjeada:   '<span style="color:var(--yellow)">Canjeada</span>',
+    perdida:    '<span class="ct-failed">Perdida</span>',
+    reactivada: '<span class="text-secondary">Reactivada</span>',
   };
 
   tbody.innerHTML = list.map(p => {
     const profitClass = p.profit > 0 ? 'pnl-positive' : p.profit < 0 ? 'pnl-negative' : 'pnl-neutral';
     const profitSign  = p.profit > 0 ? '+' : '';
-    return `<tr>
+    const verifiedBadge = p.price_verified
+      ? '<span class="badge bg-success ms-1" title="Precio real verificado en blockchain">✓</span>'
+      : '';
+    const verifyBtn = (p.type === 'vendida' && p.token_id && !p.price_verified)
+      ? `<button class="btn btn-outline-secondary btn-sm py-0 px-1 ms-1" title="Verificar precio real de ejecución"
+           onclick="verifyClosePrice(${p.id}, this)">🔍</button>`
+      : '';
+    return `<tr id="closed-row-${p.id}">
       <td class="text-secondary" style="white-space:nowrap">${p.ts}</td>
       <td class="text-light" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(p.title)}">${escHtml(p.title)}</td>
       <td>${outcomeHTML(p.outcome)}</td>
       <td class="text-end text-secondary">${p.size}</td>
       <td class="text-end text-secondary">${fmtPrice(p.avg_price)}</td>
-      <td class="text-end text-secondary">${p.close_price ? fmtPrice(p.close_price) : '—'}</td>
+      <td class="text-end text-secondary">${p.close_price ? fmtPrice(p.close_price) : '—'}${verifiedBadge}</td>
       <td class="text-end text-secondary">${fmtUsdc(p.cost)}</td>
       <td class="text-end text-secondary">${p.type !== 'perdida' ? fmtUsdc(p.revenue) : '—'}</td>
-      <td class="text-end ${profitClass}">${profitSign}${fmtUsdc(p.profit)}</td>
-      <td class="text-end">${typeLabel[p.type] || p.type}</td>
+      <td class="text-end ${profitClass}" id="closed-profit-${p.id}">${profitSign}${fmtUsdc(p.profit)}</td>
+      <td class="text-end">${typeLabel[p.type] || p.type}${verifyBtn}</td>
     </tr>`;
   }).join('');
+}
+
+async function verifyClosePrice(rowId, btn) {
+  btn.disabled = true;
+  btn.textContent = '…';
+  try {
+    const r = await fetch(`/api/positions/closed/${rowId}/verify`, { method: 'POST' });
+    const d = await r.json();
+    if (!d.ok) {
+      btn.textContent = '✗';
+      btn.title = d.error;
+      return;
+    }
+    // Update the row in place without full reload
+    const row = document.getElementById(`closed-row-${rowId}`);
+    if (row) {
+      const cells = row.querySelectorAll('td');
+      // close_price (index 5)
+      cells[5].innerHTML = fmtPrice(d.close_price) +
+        '<span class="badge bg-success ms-1" title="Precio real verificado en blockchain">✓</span>';
+      // cost (index 6)
+      cells[6].textContent = fmtUsdc(d.cost);
+      // revenue (index 7)
+      cells[7].textContent = fmtUsdc(d.revenue);
+      // profit (index 8)
+      const pClass = d.profit > 0 ? 'pnl-positive' : d.profit < 0 ? 'pnl-negative' : 'pnl-neutral';
+      const pSign  = d.profit > 0 ? '+' : '';
+      cells[8].className = `text-end ${pClass}`;
+      cells[8].textContent = pSign + fmtUsdc(d.profit);
+      // remove verify button
+      btn.remove();
+    }
+  } catch (e) {
+    btn.textContent = '✗';
+    btn.title = String(e);
+  }
 }
 
 setInterval(loadClosedPositions, 15000);
@@ -1309,6 +1392,10 @@ async function loadSessionStats() {
     const d = await r.json();
 
     document.getElementById('statBalance').textContent = '$' + (d.balance ?? 0).toFixed(2);
+    const totalEl = document.getElementById('statTotal');
+    totalEl.textContent = '$' + (d.total ?? 0).toFixed(2);
+    document.getElementById('pill-total').title =
+      `Balance USDC: $${(d.balance??0).toFixed(2)} + Apuestas abiertas: $${(d.open_value??0).toFixed(2)}`;
     applyPnl('statDaily',   'pill-daily',   d.daily   ?? {});
     applyPnl('statWeekly',  'pill-weekly',  d.weekly  ?? {});
     applyPnl('statMonthly', 'pill-monthly', d.monthly ?? {});

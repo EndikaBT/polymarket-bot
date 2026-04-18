@@ -36,6 +36,7 @@ state = {
     "last_update": None,
     "sold_tokens": set(),
     "redeemed_tokens": set(),
+    "avg_price_cache": {},  # token_id -> float: first reliable avgPrice seen, never overwritten with suspicious values
     "hidden_tokens": set(),
     "hidden_positions": {},  # token_id -> {title, outcome, size, avg_price, cost, reason}
     # closed_positions and copy_trades removed — live in DB
@@ -101,7 +102,9 @@ def init_db():
                     cost        REAL,
                     revenue     REAL,
                     profit      REAL,
-                    type        TEXT
+                    type        TEXT,
+                    token_id    TEXT,
+                    price_verified INTEGER DEFAULT 0
                 );
 
                 CREATE TABLE IF NOT EXISTS copy_trades_log (
@@ -138,6 +141,15 @@ def init_db():
                     token_id TEXT PRIMARY KEY
                 );
             """)
+        # Add columns to existing DBs that predate this schema version
+        for col, definition in [
+            ("token_id",       "TEXT"),
+            ("price_verified", "INTEGER DEFAULT 0"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE closed_positions ADD COLUMN {col} {definition}")
+            except Exception:
+                pass  # column already exists
 
 
 # ─── DB write helpers (always use _db_lock) ───────────────────────────────────
@@ -472,8 +484,23 @@ def enrich_positions(raw_positions: list) -> list:
             raw.get("token_id") or raw.get("conditionId") or ""
         )
         size          = float(raw.get("size") or 0)
-        avg_price     = float(raw.get("avgPrice") or raw.get("averagePrice") or 0)
+        avg_price_api = float(raw.get("avgPrice") or raw.get("averagePrice") or 0)
         cur_price_api = float(raw.get("curPrice") or 0)
+
+        # ── avgPrice reliability cache ────────────────────────────────────────
+        # The Data API sometimes returns avgPrice ≈ 0 or wildly wrong values
+        # (sync lag after a buy). We keep the highest reliable value we've ever
+        # seen per token so P&L doesn't swing between -50% and +450%.
+        #
+        # "Reliable" = avg_price_api >= 0.01.  We update the cache only when the
+        # new API value is higher than what we have cached (a lower value is more
+        # likely to be a sync artefact than a genuine price change).
+        cache = state["avg_price_cache"]
+        if avg_price_api >= 0.01:
+            if avg_price_api > cache.get(token_id, 0.0):
+                cache[token_id] = avg_price_api
+        avg_price         = cache.get(token_id, avg_price_api)
+        avg_price_reliable = avg_price >= 0.01
         redeemable    = bool(raw.get("redeemable", False))
         condition_id  = raw.get("conditionId", "")
         outcome_index = int(raw.get("outcomeIndex", 0))
@@ -542,12 +569,16 @@ def enrich_positions(raw_positions: list) -> list:
             save_config()
             continue
 
-        pnl_pct = ((current - avg_price) / avg_price * 100) if avg_price > 0 else 0.0
+        # Only compute P&L when avgPrice is reliable; otherwise show null
+        if avg_price_reliable and avg_price > 0:
+            pnl_pct = (current - avg_price) / avg_price * 100
+        else:
+            pnl_pct = None
 
         TAKER_FEE  = 0.02
-        cost       = round(size * avg_price, 2)
+        cost       = round(size * avg_price, 2) if avg_price_reliable else None
         sell_value = round(size * current * (1 - TAKER_FEE), 2)
-        net_profit = round(sell_value - cost, 2)
+        net_profit = round(sell_value - cost, 2) if cost is not None else None
 
         target           = state["profit_targets"].get(token_id)
         already_sold     = token_id in state["sold_tokens"]
@@ -557,23 +588,24 @@ def enrich_positions(raw_positions: list) -> list:
 
         result.append(
             {
-                "token_id":        token_id,
-                "title":           title,
-                "outcome":         outcome,
-                "size":            round(size, 4),
-                "avg_price":       round(avg_price, 4),
-                "current_price":   round(current, 4),
-                "value":           round(size * current, 2),
-                "cost":            cost,
-                "sell_value":      sell_value,
-                "net_profit":      net_profit,
-                "pnl_pct":         round(pnl_pct, 2),
-                "target_pct":      target,
-                "redeemable":      redeemable,
-                "condition_id":    condition_id,
-                "outcome_index":   outcome_index,
-                "auto_sell_active": target is not None and not already_sold,
-                "sold":            already_sold,
+                "token_id":          token_id,
+                "title":             title,
+                "outcome":           outcome,
+                "size":              round(size, 4),
+                "avg_price":         round(avg_price, 4) if avg_price_reliable else None,
+                "avg_price_reliable": avg_price_reliable,
+                "current_price":     round(current, 4),
+                "value":             round(size * current, 2),
+                "cost":              cost,
+                "sell_value":        sell_value,
+                "net_profit":        net_profit,
+                "pnl_pct":           round(pnl_pct, 2) if pnl_pct is not None else None,
+                "target_pct":        target,
+                "redeemable":        redeemable,
+                "condition_id":      condition_id,
+                "outcome_index":     outcome_index,
+                "auto_sell_active":  target is not None and not already_sold and avg_price_reliable,
+                "sold":              already_sold,
             }
         )
     return result
@@ -756,7 +788,7 @@ def check_and_redeem():
                                       pos.get("outcome_index", -1))
             if ok:
                 record_close(pos["title"], pos.get("outcome", ""),
-                             pos.get("size", 0), pos.get("avg_price", 0),
+                             pos.get("size", 0), pos.get("avg_price") or 0,
                              1.0, "canjeada")
         finally:
             state["_redeeming"] = False
@@ -796,7 +828,7 @@ def bot_loop():
                         fill = fetch_fill_price(token_id, sell_ts) or pos["current_price"]
                         credit_budget(pos["size"], fill)
                         record_close(pos["title"], pos["outcome"], pos["size"],
-                                     pos["avg_price"], fill, "vendida")
+                                     pos["avg_price"], fill, "vendida", token_id)
                     else:
                         log(f"Error al vender posición resuelta: {msg}")
                     continue
@@ -813,7 +845,7 @@ def bot_loop():
                     save_config()
                     log(f"[bot] Objetivo asignado: {pos['title'][:40]} → {auto_target}%")
                 target = pos.get("target_pct")
-                if target is not None and pos["pnl_pct"] >= target:
+                if target is not None and pos["pnl_pct"] is not None and pos["pnl_pct"] >= target:
                     log(
                         f"Objetivo alcanzado: {pos['title'][:40]} — "
                         f"P&L {pos['pnl_pct']:.1f}% ≥ {target}% → vendiendo…"
@@ -823,8 +855,9 @@ def bot_loop():
                     if ok:
                         fill = fetch_fill_price(pos["token_id"], sell_ts) or pos["current_price"]
                         credit_budget(pos["size"], fill)
+                        avg = pos["avg_price"] or state["avg_price_cache"].get(pos["token_id"], 0)
                         record_close(pos["title"], pos["outcome"], pos["size"],
-                                     pos["avg_price"], fill, "vendida")
+                                     avg, fill, "vendida", pos["token_id"])
                     else:
                         log(f"Error al vender automáticamente: {msg}")
         except Exception as e:
@@ -961,8 +994,11 @@ TAKER_FEE = 0.02
 
 
 def record_close(title: str, outcome: str, size: float, avg_price: float,
-                 close_price: float, close_type: str):
+                 close_price: float, close_type: str, token_id: str = ""):
     """Write a closed position to the DB and update session stats."""
+    avg_price  = float(avg_price  or 0)   # guard against None from unreliable API data
+    close_price = float(close_price or 0)
+    size        = float(size       or 0)
     cost    = round(size * avg_price, 2)
     revenue = round(
         size * close_price * (1 - TAKER_FEE) if close_type != "canjeada" else size * close_price,
@@ -973,11 +1009,11 @@ def record_close(title: str, outcome: str, size: float, avg_price: float,
         with _db_conn() as conn:
             conn.execute(
                 "INSERT INTO closed_positions "
-                "(ts, title, outcome, size, avg_price, close_price, cost, revenue, profit, type) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                "(ts, title, outcome, size, avg_price, close_price, cost, revenue, profit, type, token_id) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (datetime.now().strftime("%Y-%m-%d %H:%M"), title, outcome,
                  round(size, 4), round(avg_price, 4), round(close_price, 4),
-                 cost, revenue, profit, close_type)
+                 cost, revenue, profit, close_type, token_id)
             )
     sess = state["session"]
     sess["profit"] = round(sess["profit"] + profit, 2)
@@ -1341,6 +1377,91 @@ def api_closed_positions():
     return jsonify([dict(r) for r in rows])
 
 
+@app.route("/api/positions/closed/<int:row_id>/verify", methods=["POST"])
+def api_verify_close_price(row_id):
+    """Fetch the actual fill price from the Data API and update the DB row."""
+    with _db_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM closed_positions WHERE id=?", (row_id,)
+        ).fetchone()
+    if not row:
+        return jsonify({"ok": False, "error": "Registro no encontrado"})
+
+    row = dict(row)
+    token_id = row.get("token_id", "")
+    if not token_id:
+        return jsonify({"ok": False, "error": "No hay token_id — venta registrada antes de este fix"})
+
+    # Parse ts to unix timestamp for fetch_fill_price
+    try:
+        ts_dt = datetime.strptime(row["ts"], "%Y-%m-%d %H:%M")
+        min_ts = ts_dt.timestamp() - 120   # allow 2 min before recorded ts
+    except Exception:
+        min_ts = 0.0
+
+    address = state["credentials"].get("address", "").strip()
+    fill_price = 0.0
+    try:
+        resp = requests.get(
+            f"{DATA_HOST}/trades",
+            params={"user": address.lower(), "limit": 50},
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            trades = resp.json()
+            if not isinstance(trades, list):
+                trades = trades.get("trades", [])
+            for t in trades:
+                t_token = t.get("asset") or t.get("tokenId") or t.get("token_id") or ""
+                if t_token != token_id:
+                    continue
+                if (t.get("side") or "").upper() != "SELL":
+                    continue
+                ts_raw = t.get("timestamp") or t.get("createdAt") or ""
+                try:
+                    t_ts = datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00")).timestamp()
+                except Exception:
+                    try:
+                        t_ts = float(ts_raw)
+                    except Exception:
+                        t_ts = 0.0
+                if t_ts < min_ts:
+                    continue
+                price = float(t.get("price") or 0)
+                if price > 0:
+                    fill_price = price
+                    break
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)})
+
+    if fill_price <= 0:
+        return jsonify({"ok": False, "error": "No se encontró el trade en la Data API"})
+
+    size      = float(row["size"])
+    avg_price = float(row["avg_price"] or 0)
+    close_type = row["type"]
+    cost      = round(size * avg_price, 2)
+    revenue   = round(size * fill_price * (1 - TAKER_FEE) if close_type != "canjeada" else size * fill_price, 2)
+    profit    = round(revenue - cost, 2)
+
+    with _db_lock:
+        with _db_conn() as conn:
+            conn.execute(
+                "UPDATE closed_positions SET close_price=?, cost=?, revenue=?, profit=?, price_verified=1 WHERE id=?",
+                (round(fill_price, 4), cost, revenue, profit, row_id)
+            )
+
+    log(f"[verify] Precio verificado para '{row['title'][:40]}': {row['close_price']:.4f} → {fill_price:.4f}")
+    return jsonify({
+        "ok":           True,
+        "close_price":  round(fill_price, 4),
+        "cost":         cost,
+        "revenue":      revenue,
+        "profit":       profit,
+        "price_verified": True,
+    })
+
+
 @app.route("/api/positions/hidden", methods=["GET"])
 def api_hidden_positions():
     result = []
@@ -1352,6 +1473,49 @@ def api_hidden_positions():
             result.append({"token_id": token_id, "title": token_id[:30] + "…",
                            "outcome": "", "size": 0, "avg_price": 0, "cost": 0, "reason": "?"})
     return jsonify(result)
+
+
+@app.route("/api/positions/hidden/<token_id>/check-trade", methods=["GET"])
+def api_hidden_check_trade(token_id):
+    """Check if there is any SELL or redemption trade for this token in the Data API."""
+    address = state["credentials"].get("address", "").strip()
+    if not address:
+        return jsonify({"ok": False, "error": "Dirección no configurada"})
+    try:
+        resp = requests.get(
+            f"{DATA_HOST}/trades",
+            params={"user": address.lower(), "limit": 100},
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            return jsonify({"ok": False, "error": f"Data API HTTP {resp.status_code}"})
+        trades = resp.json()
+        if not isinstance(trades, list):
+            trades = trades.get("trades", [])
+
+        for t in trades:
+            t_token = t.get("asset") or t.get("tokenId") or t.get("token_id") or ""
+            if t_token != token_id:
+                continue
+            side  = (t.get("side") or "").upper()
+            if side not in ("SELL", "REDEEM", "MERGE"):
+                continue
+            price  = float(t.get("price") or 0)
+            size   = float(t.get("size") or 0)
+            ts_raw = t.get("timestamp") or t.get("createdAt") or ""
+            return jsonify({
+                "ok":    True,
+                "found": True,
+                "side":  side,
+                "price": round(price, 4),
+                "size":  round(size, 4),
+                "ts":    str(ts_raw),
+                "usdc":  round(price * size, 2),
+            })
+
+        return jsonify({"ok": True, "found": False})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)})
 
 
 @app.route("/api/redeem", methods=["POST"])
@@ -1369,7 +1533,7 @@ def api_redeem():
     if ok:
         pos = next((p for p in state["positions"] if p["token_id"] == token_id), {})
         record_close(title, pos.get("outcome", ""), pos.get("size", 0),
-                     pos.get("avg_price", 0), 1.0, "canjeada")
+                     pos.get("avg_price") or 0, 1.0, "canjeada")
     return jsonify({"ok": ok, "error": msg if not ok else "", "tx": msg if ok else ""})
 
 
@@ -1392,7 +1556,7 @@ def api_sell():
         if fill > 0:
             credit_budget(size_f, fill)
         record_close(pos.get("title", token_id[:30]), pos.get("outcome", ""),
-                     size_f, pos.get("avg_price", 0), fill or price_f, "vendida")
+                     size_f, pos.get("avg_price") or 0, fill or price_f, "vendida", token_id)
     return jsonify({"ok": ok, "error": msg if not ok else ""})
 
 
@@ -1444,12 +1608,21 @@ def api_session():
 
 @app.route("/api/stats", methods=["GET"])
 def api_stats():
+    balance = _fetch_usdc_balance()
+    # Sum current market value of all open positions
+    open_value = sum(
+        p.get("value", 0) or 0
+        for p in state.get("positions", [])
+        if not p.get("sold")
+    )
     return jsonify({
-        "balance": round(_fetch_usdc_balance(), 2),
-        "daily":   _pnl_for_period("date(ts) = date('now')"),
-        "weekly":  _pnl_for_period("ts >= date('now', '-6 days')"),
-        "monthly": _pnl_for_period("strftime('%Y-%m', ts) = strftime('%Y-%m', 'now')"),
-        "all_time": _pnl_for_period(""),
+        "balance":    round(balance, 2),
+        "open_value": round(open_value, 2),
+        "total":      round(balance + open_value, 2),
+        "daily":      _pnl_for_period("date(ts) = date('now')"),
+        "weekly":     _pnl_for_period("ts >= date('now', '-6 days')"),
+        "monthly":    _pnl_for_period("strftime('%Y-%m', ts) = strftime('%Y-%m', 'now')"),
+        "all_time":   _pnl_for_period(""),
     })
 
 
