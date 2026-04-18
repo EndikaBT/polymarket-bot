@@ -485,8 +485,43 @@ def enrich_positions(raw_positions: list) -> list:
 
         if size < DUST_THRESHOLD:
             continue
+
+        # ── Hidden-token recovery check ──────────────────────────────────────
+        # If the token was auto-hidden because price fell below 0.01 but the
+        # market has since recovered (e.g. temporary dip / bad data), unhide it
+        # and cancel the previously recorded loss so P&L stays accurate.
         if token_id in state["hidden_tokens"]:
-            continue
+            meta   = state["hidden_positions"].get(token_id, {})
+            reason = meta.get("reason", "")
+            # Only auto-unhide positions that were hidden by the bot (reason="perdida").
+            # Manually hidden positions (reason="manual") stay hidden.
+            if reason == "perdida":
+                time.sleep(0.1)
+                recovery_price = get_best_bid(token_id)
+                if recovery_price >= 0.05:  # recovered enough to be meaningful
+                    _delete_hidden(token_id)
+                    # Insert a corrective record to cancel the previously booked loss
+                    # (we recorded close_price=0 when hiding, so cost was fully lost)
+                    corrective_profit = round(meta.get("size", 0) * meta.get("avg_price", 0), 2)
+                    with _db_lock:
+                        with _db_conn() as conn:
+                            conn.execute(
+                                "INSERT INTO closed_positions "
+                                "(ts, title, outcome, size, avg_price, close_price, cost, revenue, profit, type) "
+                                "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                                (datetime.now().strftime("%Y-%m-%d %H:%M"),
+                                 title, outcome,
+                                 meta.get("size", 0), meta.get("avg_price", 0),
+                                 0.0, 0.0, 0.0,
+                                 corrective_profit,   # positive: cancels the original loss
+                                 "reactivada")
+                            )
+                    log(f"[bot] Posición reactivada (precio recuperado a {recovery_price:.3f}): {title[:45]}")
+                    # Fall through — let this position be enriched normally below
+                else:
+                    continue  # still worthless, keep hidden
+            else:
+                continue  # manually hidden, always skip
 
         time.sleep(0.1)
         live_price = get_best_bid(token_id)
@@ -545,6 +580,51 @@ def enrich_positions(raw_positions: list) -> list:
 
 
 # ─── Venta propia ─────────────────────────────────────────────────────────────
+
+def fetch_fill_price(token_id: str, min_ts: float, retries: int = 3) -> float:
+    """Query the Data API for the actual fill price of the most recent SELL trade
+    on token_id placed after min_ts (unix timestamp).  Returns 0.0 if not found."""
+    address = state["credentials"].get("address", "").strip()
+    if not address:
+        return 0.0
+    for attempt in range(retries):
+        try:
+            time.sleep(1.5)   # give the trade time to appear in the API
+            resp = requests.get(
+                f"{DATA_HOST}/trades",
+                params={"user": address.lower(), "limit": 10},
+                timeout=10,
+            )
+            if resp.status_code != 200:
+                continue
+            trades = resp.json()
+            if not isinstance(trades, list):
+                trades = trades.get("trades", [])
+            for t in trades:
+                t_token = t.get("asset") or t.get("tokenId") or t.get("token_id") or ""
+                if t_token != token_id:
+                    continue
+                if (t.get("side") or "").upper() != "SELL":
+                    continue
+                # Parse timestamp — API returns ISO string or unix int/float
+                ts_raw = t.get("timestamp") or t.get("createdAt") or t.get("ts") or ""
+                try:
+                    t_ts = datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00")).timestamp()
+                except Exception:
+                    try:
+                        t_ts = float(ts_raw)
+                    except Exception:
+                        t_ts = 0.0
+                if t_ts < min_ts - 5:   # 5-second tolerance
+                    continue
+                price = float(t.get("price") or 0)
+                if price > 0:
+                    log(f"[fill] Precio de ejecución real: {price:.4f} (vs estimado)")
+                    return price
+        except Exception:
+            pass
+    return 0.0
+
 
 def sell_position(token_id: str, size: float, price: float | None = None) -> tuple[bool, str]:
     """Sell shares via market order. Returns (success, message)."""
@@ -710,11 +790,13 @@ def bot_loop():
                         f"[bot] Precio {pos['current_price']:.4f} → mercado casi resuelto, "
                         f"vendiendo: {pos['title'][:40]}…"
                     )
+                    sell_ts = time.time()
                     ok, msg = sell_position(token_id, pos["size"], pos["current_price"])
                     if ok:
-                        credit_budget(pos["size"], pos["current_price"])
+                        fill = fetch_fill_price(token_id, sell_ts) or pos["current_price"]
+                        credit_budget(pos["size"], fill)
                         record_close(pos["title"], pos["outcome"], pos["size"],
-                                     pos["avg_price"], pos["current_price"], "vendida")
+                                     pos["avg_price"], fill, "vendida")
                     else:
                         log(f"Error al vender posición resuelta: {msg}")
                     continue
@@ -736,11 +818,13 @@ def bot_loop():
                         f"Objetivo alcanzado: {pos['title'][:40]} — "
                         f"P&L {pos['pnl_pct']:.1f}% ≥ {target}% → vendiendo…"
                     )
+                    sell_ts = time.time()
                     ok, msg = sell_position(pos["token_id"], pos["size"], pos["current_price"])
                     if ok:
-                        credit_budget(pos["size"], pos["current_price"])
+                        fill = fetch_fill_price(pos["token_id"], sell_ts) or pos["current_price"]
+                        credit_budget(pos["size"], fill)
                         record_close(pos["title"], pos["outcome"], pos["size"],
-                                     pos["avg_price"], pos["current_price"], "vendida")
+                                     pos["avg_price"], fill, "vendida")
                     else:
                         log(f"Error al vender automáticamente: {msg}")
         except Exception as e:
@@ -997,12 +1081,13 @@ def execute_copy_sell(token_id: str, title: str, profile_username: str) -> tuple
     if our_size <= 0.01:
         return False, "No tenemos posición en este token"
 
-    live_price = get_best_bid(token_id)
-    ok, msg    = sell_position(token_id, our_size)
+    sell_ts = time.time()
+    ok, msg = sell_position(token_id, our_size)
     if ok:
         _delete_copy_position(token_id)
-        if live_price > 0:
-            credit_budget(our_size, live_price)
+        fill = fetch_fill_price(token_id, sell_ts) or get_best_bid(token_id)
+        if fill > 0:
+            credit_budget(our_size, fill)
     return ok, "" if ok else msg
 
 
@@ -1299,12 +1384,15 @@ def api_sell():
     size_f  = float(size)
     price_f = float(price) if price else 0.0
     pos     = next((p for p in state["positions"] if p["token_id"] == token_id), {})
+    sell_ts = time.time()
     ok, msg = sell_position(token_id, size_f, price_f if price_f > 0 else None)
     if ok:
-        if price_f > 0:
-            credit_budget(size_f, price_f)
+        # Fetch actual fill price from Data API; fall back to UI price if unavailable
+        fill = fetch_fill_price(token_id, sell_ts) or price_f
+        if fill > 0:
+            credit_budget(size_f, fill)
         record_close(pos.get("title", token_id[:30]), pos.get("outcome", ""),
-                     size_f, pos.get("avg_price", 0), price_f, "vendida")
+                     size_f, pos.get("avg_price", 0), fill or price_f, "vendida")
     return jsonify({"ok": ok, "error": msg if not ok else ""})
 
 
