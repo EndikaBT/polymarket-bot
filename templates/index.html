@@ -465,19 +465,19 @@
           <div class="col-md-3">
             <label class="form-label text-secondary small mb-1">Modo</label>
             <select id="copyMode" class="form-select form-select-sm bg-dark text-light border-secondary">
+              <option value="fixed" selected>Cantidad fija por trade</option>
               <option value="proportional">Proporcional a su cartera</option>
-              <option value="fixed">Cantidad fija por trade</option>
             </select>
           </div>
           <div class="col-md-2" id="fixedAmountCol" style="display:none">
             <label class="form-label text-secondary small mb-1">Cantidad fija ($)</label>
             <input type="number" id="fixedAmount" min="1" step="0.5"
-              class="form-control form-control-sm bg-dark text-light border-secondary" value="5" />
+              class="form-control form-control-sm bg-dark text-light border-secondary" value="1" />
           </div>
           <div class="col-md-2">
             <label class="form-label text-secondary small mb-1">Presupuesto diario ($)</label>
             <input type="number" id="dailyBudget" min="1" step="1"
-              class="form-control form-control-sm bg-dark text-light border-secondary" value="50" />
+              class="form-control form-control-sm bg-dark text-light border-secondary" value="20" />
           </div>
           <div class="col-md-2">
             <button class="btn btn-sm btn-accent w-100" onclick="saveCopySettings()">
@@ -501,9 +501,9 @@
         <span class="small">
           <span id="spentToday" class="text-light fw-bold">$0.00</span>
           <span class="text-secondary"> gastado · </span>
-          <span id="remainingBudget" class="text-success fw-bold">$50.00</span>
+          <span id="remainingBudget" class="text-success fw-bold">$20.00</span>
           <span class="text-secondary"> restante de </span>
-          <span id="dailyBudgetDisplay" class="text-secondary">$50.00</span>
+          <span id="dailyBudgetDisplay" class="text-secondary">$20.00</span>
         </span>
       </div>
       <div class="progress" style="height:4px; background:#374151; border-radius:2px">
@@ -1083,8 +1083,37 @@ const style = document.createElement('style');
 style.textContent = `
   @keyframes spin { to { transform: rotate(360deg); } }
   .spin { display:inline-block; animation: spin .7s linear infinite; }
+  #toastContainer { position:fixed; bottom:1.25rem; right:1.25rem; z-index:9999; display:flex; flex-direction:column; gap:.5rem; }
+  .app-toast { min-width:280px; max-width:380px; padding:.65rem 1rem; border-radius:8px; font-size:.83rem;
+    color:#fff; box-shadow:0 4px 16px rgba(0,0,0,.5); display:flex; align-items:center; gap:.6rem;
+    animation: toastIn .2s ease; }
+  @keyframes toastIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:none; } }
+  .app-toast.success { background:#166534; border-left:3px solid var(--green); }
+  .app-toast.warning { background:#713f12; border-left:3px solid var(--yellow); }
+  .app-toast.error   { background:#7f1d1d; border-left:3px solid var(--red); }
+  .app-toast.info    { background:#1e3a5f; border-left:3px solid #60a5fa; }
 `;
 document.head.appendChild(style);
+
+// ── Toast helper ───────────────────────────────────────────────────────────
+(function () {
+  const container = document.createElement('div');
+  container.id = 'toastContainer';
+  document.body.appendChild(container);
+
+  window.showToast = function (msg, type = 'info', duration = 4000) {
+    const icons = { success: '✓', warning: '⚠', error: '✗', info: 'ℹ' };
+    const el = document.createElement('div');
+    el.className = `app-toast ${type}`;
+    el.innerHTML = `<span style="font-size:1rem">${icons[type] || 'ℹ'}</span><span>${msg}</span>`;
+    container.appendChild(el);
+    setTimeout(() => {
+      el.style.transition = 'opacity .3s';
+      el.style.opacity = '0';
+      setTimeout(() => el.remove(), 320);
+    }, duration);
+  };
+})();
 
 // ── Init ───────────────────────────────────────────────────────────────────
 (async function init() {
@@ -1182,9 +1211,9 @@ async function loadCopySettings() {
   try {
     const r = await fetch('/api/copy/settings');
     const s = await r.json();
-    document.getElementById('copyMode').value = s.mode || 'proportional';
-    document.getElementById('fixedAmount').value = s.fixed_amount || 5;
-    document.getElementById('dailyBudget').value = s.daily_budget || 50;
+    document.getElementById('copyMode').value = s.mode || 'fixed';
+    document.getElementById('fixedAmount').value = s.fixed_amount ?? 1;
+    document.getElementById('dailyBudget').value = s.daily_budget ?? 20;
     document.getElementById('fixedAmountCol').style.display =
       s.mode === 'fixed' ? '' : 'none';
     updateBudgetDisplay(s.spent_today || 0, s.daily_budget || 50, s.remaining || 50);
@@ -1192,8 +1221,10 @@ async function loadCopySettings() {
 }
 
 document.getElementById('copyMode').addEventListener('change', function () {
-  document.getElementById('fixedAmountCol').style.display =
-    this.value === 'fixed' ? '' : 'none';
+  const isFixed = this.value === 'fixed';
+  document.getElementById('fixedAmountCol').style.display = isFixed ? '' : 'none';
+  const label = isFixed ? 'Cantidad fija por trade' : 'Proporcional a su cartera';
+  showToast(`Modo cambiado a: ${label}. Pulsa Guardar para aplicarlo.`, 'warning');
 });
 
 async function saveCopySettings() {
