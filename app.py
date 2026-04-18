@@ -1,3 +1,4 @@
+import hmac
 import json
 import math
 import os
@@ -16,6 +17,12 @@ from flask import Flask, jsonify, redirect, render_template, request, session, u
 from werkzeug.security import check_password_hash, generate_password_hash
 
 app = Flask(__name__)
+
+# ─── Cookie / session security ────────────────────────────────────────────────
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+)
 
 # ─── Auth helpers ─────────────────────────────────────────────────────────────
 
@@ -59,16 +66,65 @@ def _clear_attempts(ip: str):
         _login_attempts.pop(ip, None)
 
 
+def _get_csrf_token() -> str:
+    """Return (and lazily create) the per-session CSRF token."""
+    if "csrf_token" not in session:
+        session["csrf_token"] = secrets.token_hex(32)
+    return session["csrf_token"]
+
+
+def _verify_csrf() -> bool:
+    """Check CSRF token for state-changing requests."""
+    token = session.get("csrf_token")
+    if not token:
+        return False
+    # Accept from header (AJAX) or form field
+    candidate = request.headers.get("X-CSRF-Token") or request.form.get("_csrf", "")
+    return hmac.compare_digest(token, candidate)
+
+
+@app.context_processor
+def inject_csrf():
+    return {"csrf_token": _get_csrf_token}
+
+
 @app.before_request
 def check_auth():
-    """Redirect unauthenticated requests to /login. API routes get 401."""
-    public = {"login", "logout", "static"}
-    if request.endpoint in public:
+    """Redirect unauthenticated requests to /login. API routes get 401.
+    Also enforces CSRF on all authenticated state-changing requests."""
+    # /login is the only truly public endpoint (no auth, no CSRF needed)
+    # /static serves files (Flask built-in, harmless)
+    # /logout requires CSRF verification even if session happens to be gone
+    if request.endpoint in ("login", "static"):
+        _get_csrf_token()   # seed token so login form can embed it
         return
+
+    # Logout: verify CSRF but don't require an active session
+    # (worst case an unauthenticated POST just clears an empty session)
+    if request.endpoint == "logout":
+        if not _verify_csrf():
+            return redirect(url_for("login"))
+        return
+
     if not session.get("authenticated"):
         if request.path.startswith("/api/"):
             return jsonify({"ok": False, "error": "No autenticado"}), 401
         return redirect(url_for("login"))
+
+    # CSRF check for every non-GET authenticated request
+    if request.method not in ("GET", "HEAD", "OPTIONS"):
+        if not _verify_csrf():
+            if request.path.startswith("/api/"):
+                return jsonify({"ok": False, "error": "CSRF inválido"}), 403
+            return redirect(url_for("login"))
+
+
+@app.after_request
+def security_headers(response):
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    return response
 
 
 # ─── Paths ────────────────────────────────────────────────────────────────────
@@ -2101,7 +2157,9 @@ def login():
                 with _db_lock:
                     with _db_conn() as conn:
                         conn.execute("INSERT OR REPLACE INTO kv VALUES ('password_hash', ?)", (h,))
+                session.clear()
                 session["authenticated"] = True
+                session["csrf_token"] = secrets.token_hex(32)
                 session.permanent = True
                 return redirect(url_for("index"))
         else:
@@ -2113,7 +2171,9 @@ def login():
                 pw = request.form.get("password", "")
                 if check_password_hash(row["value"], pw):
                     _clear_attempts(ip)
+                    session.clear()
                     session["authenticated"] = True
+                    session["csrf_token"] = secrets.token_hex(32)
                     session.permanent = True
                     return redirect(url_for("index"))
                 else:
@@ -2122,6 +2182,31 @@ def login():
                     error = f"Contraseña incorrecta — {max(0, remaining)} intentos restantes"
 
     return render_template("login.html", has_password=has_password, error=error)
+
+
+@app.route("/api/auth/change-password", methods=["POST"])
+def api_change_password():
+    data      = request.get_json(force=True, silent=True) or {}
+    current   = data.get("current", "")
+    new_pw    = data.get("new", "")
+    confirm   = data.get("confirm", "")
+
+    if len(new_pw) < 8:
+        return jsonify({"ok": False, "error": "Mínimo 8 caracteres"}), 400
+    if new_pw != confirm:
+        return jsonify({"ok": False, "error": "Las contraseñas no coinciden"}), 400
+
+    with _db_conn() as conn:
+        row = conn.execute("SELECT value FROM kv WHERE key='password_hash'").fetchone()
+    if not row or not check_password_hash(row["value"], current):
+        return jsonify({"ok": False, "error": "Contraseña actual incorrecta"}), 403
+
+    h = generate_password_hash(new_pw)
+    with _db_lock:
+        with _db_conn() as conn:
+            conn.execute("INSERT OR REPLACE INTO kv VALUES ('password_hash', ?)", (h,))
+    log("[auth] Contraseña cambiada")
+    return jsonify({"ok": True})
 
 
 @app.route("/logout", methods=["POST"])

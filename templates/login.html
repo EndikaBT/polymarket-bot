@@ -62,6 +62,7 @@
     {% endif %}
 
     <form method="POST" autocomplete="off">
+      <input type="hidden" name="_csrf" value="{{ csrf_token() }}" />
       {% if not has_password %}
       <div class="mb-3">
         <label class="form-label text-secondary small">Nueva contraseña <span class="text-danger">*</span></label>
