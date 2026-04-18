@@ -798,9 +798,10 @@ def check_and_redeem():
             if ok:
                 # Use avg_price_cache as fallback when pos["avg_price"] is None
                 avg_p = pos.get("avg_price") or state["avg_price_cache"].get(token_id, 0)
+                size  = pos.get("size", 0)
                 record_close(pos["title"], pos.get("outcome", ""),
-                             pos.get("size", 0), avg_p,
-                             1.0, "canjeada", token_id)
+                             size, avg_p, 1.0, "canjeada", token_id)
+                credit_budget(size, 1.0)  # canjeada = recibe 1 USDC por token
                 log(f"[redeem] ✓ Registrado en historial: {pos['title'][:45]}")
         finally:
             state["_redeeming"] = False
@@ -1543,9 +1544,11 @@ def api_redeem():
     outcome_index = int(data.get("outcome_index", -1))
     ok, msg       = redeem_position(token_id, title, condition_id, outcome_index)
     if ok:
-        pos = next((p for p in state["positions"] if p["token_id"] == token_id), {})
-        record_close(title, pos.get("outcome", ""), pos.get("size", 0),
-                     pos.get("avg_price") or 0, 1.0, "canjeada")
+        pos  = next((p for p in state["positions"] if p["token_id"] == token_id), {})
+        size = float(pos.get("size") or 0)
+        avg_p = pos.get("avg_price") or state["avg_price_cache"].get(token_id, 0)
+        record_close(title, pos.get("outcome", ""), size, avg_p, 1.0, "canjeada", token_id)
+        credit_budget(size, 1.0)  # canjeada = recibe 1 USDC por token
     return jsonify({"ok": ok, "error": msg if not ok else "", "tx": msg if ok else ""})
 
 
@@ -1761,6 +1764,20 @@ def api_copy_update_settings():
         s["daily_budget"] = v
 
     save_config()
+    return jsonify({"ok": True, "remaining": round(get_remaining_budget(), 2)})
+
+
+@app.route("/api/copy/budget/reset", methods=["POST"])
+def api_budget_reset():
+    """Reset today's spent to zero."""
+    today = date.today().isoformat()
+    with _db_lock:
+        with _db_conn() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO daily_budget (date, spent) VALUES (?, 0.0)",
+                (today,)
+            )
+    log("[budget] Gastado hoy reiniciado a $0")
     return jsonify({"ok": True, "remaining": round(get_remaining_budget(), 2)})
 
 
