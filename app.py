@@ -6,6 +6,7 @@ import re
 import sqlite3
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime
 
 import requests
@@ -39,6 +40,7 @@ state = {
     "avg_price_cache": {},  # token_id -> float: first reliable avgPrice seen, never overwritten with suspicious values
     "hidden_tokens": set(),
     "hidden_positions": {},  # token_id -> {title, outcome, size, avg_price, cost, reason}
+    "_hidden_check_ts": {},  # token_id -> float: last time recovery was checked
     # closed_positions and copy_trades removed — live in DB
     "session": {            # resets on every server restart
         "profit": 0.0,
@@ -476,8 +478,16 @@ def get_best_bid(token_id: str) -> float:
     return 0.0
 
 
+HIDDEN_RECOVERY_TTL = 60.0  # seconds between recovery checks for hidden positions
+
+
 def enrich_positions(raw_positions: list) -> list:
-    result = []
+    now = time.time()
+
+    # ── Pass 1: parse metadata, decide which tokens need a price fetch ────────
+    parsed     = []   # list of dicts with pre-parsed fields
+    fetch_ids  = []   # token_ids that need get_best_bid()
+
     for raw in raw_positions:
         token_id = (
             raw.get("asset") or raw.get("tokenId") or
@@ -487,72 +497,103 @@ def enrich_positions(raw_positions: list) -> list:
         avg_price_api = float(raw.get("avgPrice") or raw.get("averagePrice") or 0)
         cur_price_api = float(raw.get("curPrice") or 0)
 
-        # ── avgPrice reliability cache ────────────────────────────────────────
-        # The Data API sometimes returns avgPrice ≈ 0 or wildly wrong values
-        # (sync lag after a buy). We keep the highest reliable value we've ever
-        # seen per token so P&L doesn't swing between -50% and +450%.
-        #
-        # "Reliable" = avg_price_api >= 0.01.  We update the cache only when the
-        # new API value is higher than what we have cached (a lower value is more
-        # likely to be a sync artefact than a genuine price change).
+        if size < DUST_THRESHOLD:
+            continue
+        if token_id in state["redeemed_tokens"]:
+            continue
+
+        # avgPrice cache
         cache = state["avg_price_cache"]
-        if avg_price_api >= 0.01:
-            if avg_price_api > cache.get(token_id, 0.0):
-                cache[token_id] = avg_price_api
-        avg_price         = cache.get(token_id, avg_price_api)
+        if avg_price_api >= 0.01 and avg_price_api > cache.get(token_id, 0.0):
+            cache[token_id] = avg_price_api
+        avg_price          = cache.get(token_id, avg_price_api)
         avg_price_reliable = avg_price >= 0.01
-        redeemable    = bool(raw.get("redeemable", False))
-        condition_id  = raw.get("conditionId", "")
-        outcome_index = int(raw.get("outcomeIndex", 0))
+
         title = (
             raw.get("title") or raw.get("question") or
             raw.get("slug") or (f"{token_id[:20]}…" if token_id else "Desconocido")
         )
-        outcome = raw.get("outcome") or raw.get("side") or ""
 
-        if size < DUST_THRESHOLD:
-            continue
+        entry = {
+            "token_id":      token_id,
+            "size":          size,
+            "avg_price":     avg_price,
+            "avg_price_reliable": avg_price_reliable,
+            "cur_price_api": cur_price_api,
+            "title":         title,
+            "outcome":       raw.get("outcome") or raw.get("side") or "",
+            "redeemable":    bool(raw.get("redeemable", False)),
+            "condition_id":  raw.get("conditionId", ""),
+            "outcome_index": int(raw.get("outcomeIndex", 0)),
+            "is_hidden":     False,
+            "hidden_meta":   None,
+        }
 
-        # ── Hidden-token recovery check ──────────────────────────────────────
-        # If the token was auto-hidden because price fell below 0.01 but the
-        # market has since recovered (e.g. temporary dip / bad data), unhide it
-        # and cancel the previously recorded loss so P&L stays accurate.
         if token_id in state["hidden_tokens"]:
             meta   = state["hidden_positions"].get(token_id, {})
             reason = meta.get("reason", "")
-            # Only auto-unhide positions that were hidden by the bot (reason="perdida").
-            # Manually hidden positions (reason="manual") stay hidden.
-            if reason == "perdida":
-                time.sleep(0.1)
-                recovery_price = get_best_bid(token_id)
-                if recovery_price >= 0.05:  # recovered enough to be meaningful
-                    _delete_hidden(token_id)
-                    # Insert a corrective record to cancel the previously booked loss
-                    # (we recorded close_price=0 when hiding, so cost was fully lost)
-                    corrective_profit = round(meta.get("size", 0) * meta.get("avg_price", 0), 2)
-                    with _db_lock:
-                        with _db_conn() as conn:
-                            conn.execute(
-                                "INSERT INTO closed_positions "
-                                "(ts, title, outcome, size, avg_price, close_price, cost, revenue, profit, type) "
-                                "VALUES (?,?,?,?,?,?,?,?,?,?)",
-                                (datetime.now().strftime("%Y-%m-%d %H:%M"),
-                                 title, outcome,
-                                 meta.get("size", 0), meta.get("avg_price", 0),
-                                 0.0, 0.0, 0.0,
-                                 corrective_profit,   # positive: cancels the original loss
-                                 "reactivada")
-                            )
-                    log(f"[bot] Posición reactivada (precio recuperado a {recovery_price:.3f}): {title[:45]}")
-                    # Fall through — let this position be enriched normally below
-                else:
-                    continue  # still worthless, keep hidden
-            else:
-                continue  # manually hidden, always skip
+            if reason != "perdida":
+                continue  # manually hidden — skip entirely, no API call
+            # Rate-limit recovery checks to once per HIDDEN_RECOVERY_TTL
+            last = state["_hidden_check_ts"].get(token_id, 0.0)
+            if now - last < HIDDEN_RECOVERY_TTL:
+                continue   # checked recently, still skip
+            entry["is_hidden"]   = True
+            entry["hidden_meta"] = meta
+            fetch_ids.append(token_id)
+        else:
+            fetch_ids.append(token_id)
 
-        time.sleep(0.1)
-        live_price = get_best_bid(token_id)
-        current    = live_price if live_price > 0 else cur_price_api
+        parsed.append(entry)
+
+    # ── Pass 2: fetch all prices in parallel ──────────────────────────────────
+    prices: dict[str, float] = {}
+    if fetch_ids:
+        with ThreadPoolExecutor(max_workers=min(len(fetch_ids), 12)) as ex:
+            futures = {ex.submit(get_best_bid, tid): tid for tid in fetch_ids}
+            for future in as_completed(futures):
+                tid = futures[future]
+                try:
+                    prices[tid] = future.result()
+                except Exception:
+                    prices[tid] = 0.0
+
+    # ── Pass 3: process results ───────────────────────────────────────────────
+    result = []
+    for entry in parsed:
+        token_id      = entry["token_id"]
+        live_price    = prices.get(token_id, 0.0)
+        size          = entry["size"]
+        avg_price     = entry["avg_price"]
+        avg_price_reliable = entry["avg_price_reliable"]
+        title         = entry["title"]
+        outcome       = entry["outcome"]
+        cur_price_api = entry["cur_price_api"]
+
+        if entry["is_hidden"]:
+            # Update TTL regardless of result
+            state["_hidden_check_ts"][token_id] = now
+            meta = entry["hidden_meta"]
+            if live_price >= 0.05:
+                _delete_hidden(token_id)
+                corrective_profit = round(meta.get("size", 0) * meta.get("avg_price", 0), 2)
+                with _db_lock:
+                    with _db_conn() as conn:
+                        conn.execute(
+                            "INSERT INTO closed_positions "
+                            "(ts, title, outcome, size, avg_price, close_price, cost, revenue, profit, type) "
+                            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                            (datetime.now().strftime("%Y-%m-%d %H:%M"),
+                             title, outcome,
+                             meta.get("size", 0), meta.get("avg_price", 0),
+                             0.0, 0.0, 0.0, corrective_profit, "reactivada")
+                        )
+                log(f"[bot] Posición reactivada (precio recuperado a {live_price:.3f}): {title[:45]}")
+                # fall through — enrich normally below
+            else:
+                continue  # still worthless
+
+        current = live_price if live_price > 0 else cur_price_api
 
         # Auto-hide worthless losing positions
         if current < 0.01:
@@ -580,43 +621,38 @@ def enrich_positions(raw_positions: list) -> list:
         sell_value = round(size * current * (1 - TAKER_FEE), 2)
         net_profit = round(sell_value - cost, 2) if cost is not None else None
 
-        target           = state["profit_targets"].get(token_id)
-        already_sold     = token_id in state["sold_tokens"]
-        already_redeemed = token_id in state["redeemed_tokens"]
-        if already_redeemed:
-            continue
+        target       = state["profit_targets"].get(token_id)
+        already_sold = token_id in state["sold_tokens"]
 
         # Fecha de apertura — disponible para copytrades
-        copy_entry = state["copy_positions"].get(token_id)
+        copy_entry   = state["copy_positions"].get(token_id)
         bought_at_ts = copy_entry.get("bought_at") if copy_entry else None
-        opened_at = (
+        opened_at    = (
             datetime.fromtimestamp(bought_at_ts).strftime("%Y-%m-%d %H:%M")
             if bought_at_ts else None
         )
 
-        result.append(
-            {
-                "token_id":          token_id,
-                "title":             title,
-                "outcome":           outcome,
-                "size":              round(size, 4),
-                "avg_price":         round(avg_price, 4) if avg_price_reliable else None,
-                "avg_price_reliable": avg_price_reliable,
-                "current_price":     round(current, 4),
-                "value":             round(size * current, 2),
-                "cost":              cost,
-                "sell_value":        sell_value,
-                "net_profit":        net_profit,
-                "pnl_pct":           round(pnl_pct, 2) if pnl_pct is not None else None,
-                "target_pct":        target,
-                "redeemable":        redeemable,
-                "condition_id":      condition_id,
-                "outcome_index":     outcome_index,
-                "auto_sell_active":  target is not None and not already_sold and avg_price_reliable,
-                "sold":              already_sold,
-                "opened_at":         opened_at,
-            }
-        )
+        result.append({
+            "token_id":           token_id,
+            "title":              title,
+            "outcome":            outcome,
+            "size":               round(size, 4),
+            "avg_price":          round(avg_price, 4) if avg_price_reliable else None,
+            "avg_price_reliable": avg_price_reliable,
+            "current_price":      round(current, 4),
+            "value":              round(size * current, 2),
+            "cost":               cost,
+            "sell_value":         sell_value,
+            "net_profit":         net_profit,
+            "pnl_pct":            round(pnl_pct, 2) if pnl_pct is not None else None,
+            "target_pct":         target,
+            "redeemable":         entry["redeemable"],
+            "condition_id":       entry["condition_id"],
+            "outcome_index":      entry["outcome_index"],
+            "auto_sell_active":   target is not None and not already_sold and avg_price_reliable,
+            "sold":               already_sold,
+            "opened_at":          opened_at,
+        })
     return result
 
 
