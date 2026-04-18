@@ -1383,11 +1383,15 @@ def api_hide():
 
 @app.route("/api/positions/closed", methods=["GET"])
 def api_closed_positions():
+    limit  = int(request.args.get("limit",  10))
+    offset = int(request.args.get("offset",  0))
     with _db_conn() as conn:
-        rows = conn.execute(
-            "SELECT * FROM closed_positions ORDER BY id DESC LIMIT 500"
+        total = conn.execute("SELECT COUNT(*) FROM closed_positions").fetchone()[0]
+        rows  = conn.execute(
+            "SELECT * FROM closed_positions ORDER BY id DESC LIMIT ? OFFSET ?",
+            (limit, offset)
         ).fetchall()
-    return jsonify([dict(r) for r in rows])
+    return jsonify({"rows": [dict(r) for r in rows], "total": total})
 
 
 @app.route("/api/positions/closed/<int:row_id>/verify", methods=["POST"])
@@ -1988,4 +1992,4 @@ if __name__ == "__main__":
     if state["credentials"].get("private_key"):
         init_client()
     print("Abriendo en http://localhost:5000")
-    app.run(host="127.0.0.1", port=5000, debug=False, use_reloader=False)
+    app.run(host="127.0.0.1", port=5000, debug=False, use_reloader=False, threaded=True)
