@@ -1552,16 +1552,35 @@ def api_redeem():
     return jsonify({"ok": ok, "error": msg if not ok else "", "tx": msg if ok else ""})
 
 
+SLIPPAGE_WARN = 0.08  # warn if fresh price is >8% below the UI price
+
 @app.route("/api/sell", methods=["POST"])
 def api_sell():
     data     = request.get_json(force=True)
     token_id = data.get("token_id")
     size     = data.get("size")
     price    = data.get("price")
+    force    = bool(data.get("force", False))   # bypass slippage check
     if not token_id or not size:
         return jsonify({"ok": False, "error": "token_id y size requeridos"})
     size_f  = float(size)
     price_f = float(price) if price else 0.0
+
+    # ── Slippage pre-check (skip when force=True) ─────────────────────────
+    if price_f > 0 and not force:
+        fresh = get_best_bid(token_id)
+        if fresh > 0 and fresh < price_f * (1 - SLIPPAGE_WARN):
+            drop_pct = round((price_f - fresh) / price_f * 100, 1)
+            log(f"[sell] Slippage detectado en '{token_id[:20]}': "
+                f"UI={price_f:.4f} actual={fresh:.4f} (−{drop_pct}%)")
+            return jsonify({
+                "ok":          False,
+                "slippage":    True,
+                "sent_price":  round(price_f, 4),
+                "fresh_price": round(fresh, 4),
+                "diff_pct":    drop_pct,
+            })
+
     pos     = next((p for p in state["positions"] if p["token_id"] == token_id), {})
     sell_ts = time.time()
     ok, msg = sell_position(token_id, size_f, price_f if price_f > 0 else None)
