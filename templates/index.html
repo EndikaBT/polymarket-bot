@@ -581,7 +581,8 @@
       </div>
       <div class="modal-body" id="sellModalBody"></div>
       <div class="modal-footer border-secondary">
-        <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+        <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal"
+          onclick="pendingSell=null">Cancelar</button>
         <button type="button" class="btn btn-sm btn-danger" id="confirmSellBtn">
           <i class="bi bi-check-lg"></i> Vender
         </button>
@@ -1035,38 +1036,84 @@ async function redeemPosition(tokenId, title, conditionId, outcomeIndex) {
 }
 
 const sellModal = new bootstrap.Modal(document.getElementById('sellModal'));
+
+function sellModalRows(price, cost) {
+  const net      = price * (pendingSell?.size ?? 0) * 0.98 - (cost ?? 0);
+  const netColor = net >= 0 ? 'var(--green)' : 'var(--red)';
+  const netSign  = net >= 0 ? '+' : '';
+  const size     = pendingSell?.size ?? 0;
+  return `
+    <tr><td>Precio estimado</td><td class="text-end text-light">${fmtPrice(price)}</td></tr>
+    <tr><td>Ingreso bruto</td><td class="text-end text-light">${fmtUsdc(size * price)}</td></tr>
+    <tr><td>Comisión (2%)</td><td class="text-end text-warning">−${fmtUsdc(size * price * 0.02)}</td></tr>
+    <tr><td>Coste de compra</td><td class="text-end text-secondary">−${fmtUsdc(cost ?? 0)}</td></tr>
+    <tr style="border-top:1px solid #374151"><td><strong>Beneficio neto</strong></td>
+      <td class="text-end fw-bold" style="color:${netColor}">${netSign}${fmtUsdc(net)}</td></tr>`;
+}
+
 function openSellModal(tokenId, title, size, price, cost, netProfit) {
-  pendingSell = { tokenId, size, price };
-  const netColor = netProfit >= 0 ? 'var(--green)' : 'var(--red)';
-  const netSign  = netProfit >= 0 ? '+' : '';
-  const sellNet  = size * price * 0.98;
+  pendingSell = { tokenId, title, size, price, cost, force: false };
+  const confirmBtn = document.getElementById('confirmSellBtn');
+  confirmBtn.textContent = 'Vender';
+  confirmBtn.className   = 'btn btn-sm btn-danger';
+  confirmBtn.disabled    = false;
   document.getElementById('sellModalBody').innerHTML = `
     <p class="mb-1">Vas a vender:</p>
-    <p class="fw-bold text-light">${escHtml(title)}</p>
-    <table class="table table-sm table-borderless text-secondary mb-0">
+    <p class="fw-bold text-light mb-2">${escHtml(title)}</p>
+    <table class="table table-sm table-borderless text-secondary mb-0" id="sellTable">
       <tr><td>Cantidad</td><td class="text-end text-light">${size}</td></tr>
-      <tr><td>Precio estimado</td><td class="text-end text-light">${fmtPrice(price)}</td></tr>
-      <tr><td>Ingreso bruto</td><td class="text-end text-light">${fmtUsdc(size * price)}</td></tr>
-      <tr><td>Comisión (2%)</td><td class="text-end text-warning">−${fmtUsdc(size * price * 0.02)}</td></tr>
-      <tr><td>Coste de compra</td><td class="text-end text-secondary">−${fmtUsdc(cost ?? 0)}</td></tr>
-      <tr style="border-top:1px solid #374151"><td><strong>Beneficio neto</strong></td>
-        <td class="text-end fw-bold" style="color:${netColor}">${netSign}${fmtUsdc(netProfit ?? sellNet - (cost ?? 0))}</td></tr>
+      ${sellModalRows(price, cost)}
     </table>`;
   sellModal.show();
 }
 
+function showSlippageWarning(d) {
+  const { sent_price, fresh_price, diff_pct } = d;
+  const { size, cost } = pendingSell;
+  // update pendingSell with the fresh price so force=true uses it
+  pendingSell.price = fresh_price;
+  pendingSell.force = true;
+
+  document.getElementById('sellModalBody').innerHTML = `
+    <div class="alert alert-warning py-2 mb-2" style="font-size:.82rem">
+      <strong>⚠ Caída de precio detectada</strong><br>
+      El precio ha bajado <strong>−${diff_pct}%</strong> desde que abriste el diálogo.<br>
+      <span class="text-secondary">Antes: ${fmtPrice(sent_price)} → Ahora: <strong>${fmtPrice(fresh_price)}</strong></span>
+    </div>
+    <p class="mb-1 text-secondary small">Si vendes ahora:</p>
+    <table class="table table-sm table-borderless text-secondary mb-0" id="sellTable">
+      <tr><td>Cantidad</td><td class="text-end text-light">${size}</td></tr>
+      ${sellModalRows(fresh_price, cost)}
+    </table>`;
+
+  const confirmBtn = document.getElementById('confirmSellBtn');
+  confirmBtn.innerHTML = '<i class="bi bi-exclamation-triangle-fill me-1"></i>Vender de todas formas';
+  confirmBtn.className = 'btn btn-sm btn-warning text-dark';
+}
+
 document.getElementById('confirmSellBtn').addEventListener('click', async () => {
   if (!pendingSell) return;
-  sellModal.hide();
-  const { tokenId, size, price } = pendingSell;
-  pendingSell = null;
+  const btn = document.getElementById('confirmSellBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin">⟳</span> Vendiendo…';
+
+  const { tokenId, size, price, force } = pendingSell;
   try {
     const r = await fetch('/api/sell', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ token_id: tokenId, size, price })
+      body: JSON.stringify({ token_id: tokenId, size, price, force })
     });
     const d = await r.json();
+
+    if (d.slippage) {
+      // Don't close — show slippage warning inside modal
+      showSlippageWarning(d);
+      return;
+    }
+
+    sellModal.hide();
+    pendingSell = null;
     if (d.ok) {
       appendLogs([`[manual] Orden de venta enviada correctamente`]);
       setTimeout(loadPositions, 2000);
@@ -1074,6 +1121,8 @@ document.getElementById('confirmSellBtn').addEventListener('click', async () => 
       appendLogs([`[manual] Error al vender: ${d.error || 'desconocido'}`]);
     }
   } catch (err) {
+    sellModal.hide();
+    pendingSell = null;
     appendLogs([`[manual] Error de red: ${err}`]);
   }
 });
