@@ -91,9 +91,11 @@
       font-size: 0.75rem;
       text-transform: uppercase;
       letter-spacing: 0.6px;
+      user-select: none;
       border-color: var(--card-border);
       white-space: nowrap;
     }
+    .sortable-col:hover { color: var(--accent-light) !important; background: #1a2233 !important; }
     .table > tbody > tr > td {
       border-color: #283040;
       vertical-align: middle;
@@ -336,17 +338,28 @@
     </div>
     <div class="card-body p-0">
       <div class="table-responsive">
-        <table class="table table-sm mb-0">
+        <table class="table table-sm mb-0" id="positionsTable">
           <thead>
             <tr>
-              <th>Mercado</th>
-              <th>Resultado</th>
-              <th class="text-end">Cantidad</th>
-              <th class="text-end">Precio compra</th>
-              <th class="text-end">Precio actual</th>
-              <th class="text-end">Valor (USDC)</th>
-              <th class="text-end">Beneficio neto</th>
+              <th class="sortable-col" data-table="pos" data-key="title" style="cursor:pointer">
+                Mercado <span class="sort-icon text-secondary">⇅</span>
+              </th>
+              <th class="sortable-col" data-table="pos" data-key="outcome" style="cursor:pointer">
+                Resultado <span class="sort-icon text-secondary">⇅</span>
+              </th>
+              <th class="text-end sortable-col" data-table="pos" data-key="cost" style="cursor:pointer">
+                Coste <span class="sort-icon text-secondary">⇅</span>
+              </th>
+              <th class="text-end sortable-col" data-table="pos" data-key="value" style="cursor:pointer">
+                Valor <span class="sort-icon text-secondary">⇅</span>
+              </th>
+              <th class="text-end sortable-col" data-table="pos" data-key="net_profit" style="cursor:pointer">
+                Beneficio <span class="sort-icon text-secondary">⇅</span>
+              </th>
               <th class="text-end">P&amp;L %</th>
+              <th class="text-end sortable-col" data-table="pos" data-key="opened_at" style="cursor:pointer">
+                Fecha <span class="sort-icon text-secondary">⇅</span>
+              </th>
               <th class="text-center">Objetivo %</th>
               <th class="text-center">Acción</th>
             </tr>
@@ -358,39 +371,6 @@
                 Sin posiciones — configura tus credenciales y pulsa Actualizar
               </td>
             </tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-  </div>
-
-  <!-- Hidden positions -->
-  <div class="card mb-3">
-    <div class="card-header d-flex align-items-center justify-content-between"
-         style="cursor:pointer" data-bs-toggle="collapse" data-bs-target="#hiddenPanel">
-      <span>
-        <i class="bi bi-eye-slash text-secondary me-1"></i>
-        Apuestas ocultas
-        <span id="hiddenCount" class="badge bg-secondary ms-1">0</span>
-      </span>
-      <i class="bi bi-chevron-down text-secondary"></i>
-    </div>
-    <div class="collapse" id="hiddenPanel">
-      <div class="table-responsive">
-        <table class="table table-sm table-borderless mb-0">
-          <thead>
-            <tr class="text-secondary" style="font-size:.75rem">
-              <th>Mercado</th>
-              <th>Outcome</th>
-              <th class="text-end">Cantidad</th>
-              <th class="text-end">Precio compra</th>
-              <th class="text-end">Coste</th>
-              <th class="text-end">Motivo</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody id="hiddenBody">
-            <tr><td colspan="7" class="empty-state text-secondary text-center py-3">Sin apuestas ocultas</td></tr>
           </tbody>
         </table>
       </div>
@@ -411,23 +391,30 @@
     </div>
     <div class="collapse" id="closedPanel">
       <div class="table-responsive">
-        <table class="table table-sm table-borderless mb-0">
+        <table class="table table-sm table-borderless mb-0" id="closedTable">
           <thead>
             <tr class="text-secondary" style="font-size:.75rem">
-              <th>Fecha</th>
-              <th>Mercado</th>
-              <th>Outcome</th>
-              <th class="text-end">Cantidad</th>
-              <th class="text-end">Compra</th>
-              <th class="text-end">Cierre</th>
-              <th class="text-end">Coste</th>
+              <th class="sortable-col" data-table="closed" data-key="ts" style="cursor:pointer">
+                Fecha <span class="sort-icon">⇅</span>
+              </th>
+              <th class="sortable-col" data-table="closed" data-key="title" style="cursor:pointer">
+                Mercado <span class="sort-icon">⇅</span>
+              </th>
+              <th class="sortable-col" data-table="closed" data-key="outcome" style="cursor:pointer">
+                Resultado <span class="sort-icon">⇅</span>
+              </th>
+              <th class="text-end sortable-col" data-table="closed" data-key="cost" style="cursor:pointer">
+                Coste <span class="sort-icon">⇅</span>
+              </th>
               <th class="text-end">Ingreso</th>
-              <th class="text-end">Beneficio</th>
+              <th class="text-end sortable-col" data-table="closed" data-key="profit" style="cursor:pointer">
+                Beneficio <span class="sort-icon">⇅</span>
+              </th>
               <th class="text-end">Tipo</th>
             </tr>
           </thead>
           <tbody id="closedBody">
-            <tr><td colspan="10" class="text-secondary text-center py-3">Sin historial aún</td></tr>
+            <tr><td colspan="7" class="text-secondary text-center py-3">Sin historial aún</td></tr>
           </tbody>
         </table>
       </div>
@@ -478,19 +465,19 @@
           <div class="col-md-3">
             <label class="form-label text-secondary small mb-1">Modo</label>
             <select id="copyMode" class="form-select form-select-sm bg-dark text-light border-secondary">
+              <option value="fixed" selected>Cantidad fija por trade</option>
               <option value="proportional">Proporcional a su cartera</option>
-              <option value="fixed">Cantidad fija por trade</option>
             </select>
           </div>
           <div class="col-md-2" id="fixedAmountCol" style="display:none">
             <label class="form-label text-secondary small mb-1">Cantidad fija ($)</label>
             <input type="number" id="fixedAmount" min="1" step="0.5"
-              class="form-control form-control-sm bg-dark text-light border-secondary" value="5" />
+              class="form-control form-control-sm bg-dark text-light border-secondary" value="1" />
           </div>
           <div class="col-md-2">
             <label class="form-label text-secondary small mb-1">Presupuesto diario ($)</label>
             <input type="number" id="dailyBudget" min="1" step="1"
-              class="form-control form-control-sm bg-dark text-light border-secondary" value="50" />
+              class="form-control form-control-sm bg-dark text-light border-secondary" value="20" />
           </div>
           <div class="col-md-2">
             <button class="btn btn-sm btn-accent w-100" onclick="saveCopySettings()">
@@ -505,13 +492,18 @@
     <!-- Budget bar -->
     <div class="card-body py-2 border-bottom" style="border-color:var(--card-border)!important">
       <div class="d-flex justify-content-between align-items-center mb-1">
-        <span class="text-secondary small">Presupuesto hoy</span>
+        <div class="d-flex align-items-center gap-2">
+          <span class="text-secondary small">Presupuesto hoy</span>
+          <button id="resetBudgetBtn" class="btn btn-outline-secondary py-0 px-2" style="font-size:.7rem;line-height:1.4" title="Reiniciar gastado hoy a $0">
+            <i class="bi bi-arrow-counterclockwise"></i> Reset
+          </button>
+        </div>
         <span class="small">
           <span id="spentToday" class="text-light fw-bold">$0.00</span>
           <span class="text-secondary"> gastado · </span>
-          <span id="remainingBudget" class="text-success fw-bold">$50.00</span>
+          <span id="remainingBudget" class="text-success fw-bold">$20.00</span>
           <span class="text-secondary"> restante de </span>
-          <span id="dailyBudgetDisplay" class="text-secondary">$50.00</span>
+          <span id="dailyBudgetDisplay" class="text-secondary">$20.00</span>
         </span>
       </div>
       <div class="progress" style="height:4px; background:#374151; border-radius:2px">
@@ -601,9 +593,10 @@
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script>
 // ── Estado ─────────────────────────────────────────────────────────────────
-let positions = [];
-let pendingSell = null;
-let botPolling  = null;
+let positions       = [];
+let closedPositions = [];
+let pendingSell     = null;
+let botPolling      = null;
 let targetSaveTimers = {};
 
 // ── Utils ──────────────────────────────────────────────────────────────────
@@ -661,7 +654,57 @@ document.getElementById('clearLogsBtn').addEventListener('click', () => {
   lastLogCount = 0;
 });
 
-// ── Tabla de posiciones ────────────────────────────────────────────────────
+// ── Tabla de posiciones ─────────────────────────────────────────────────────
+// Sort state for each table: { key, dir }  dir = 'asc' | 'desc'
+const sortState = { pos: { key: null, dir: 'asc' }, closed: { key: null, dir: 'asc' } };
+
+function applySortIcons(tableId, key) {
+  document.querySelectorAll(`[data-table="${tableId}"].sortable-col`).forEach(th => {
+    const icon = th.querySelector('.sort-icon');
+    if (!icon) return;
+    if (th.dataset.key === key) {
+      icon.textContent = sortState[tableId].dir === 'asc' ? '↑' : '↓';
+      icon.style.color = 'var(--accent-light)';
+    } else {
+      icon.textContent = '⇅';
+      icon.style.color = '';
+    }
+  });
+}
+
+function sortedList(list, tableId) {
+  const s = sortState[tableId];
+  if (!s.key) return list;
+  return [...list].sort((a, b) => {
+    let va = a[s.key] ?? '';
+    let vb = b[s.key] ?? '';
+    if (typeof va === 'number' && typeof vb === 'number') {
+      return s.dir === 'asc' ? va - vb : vb - va;
+    }
+    va = String(va).toLowerCase();
+    vb = String(vb).toLowerCase();
+    return s.dir === 'asc' ? va.localeCompare(vb) : vb.localeCompare(va);
+  });
+}
+
+// Wire up sortable-col clicks
+document.addEventListener('click', e => {
+  const th = e.target.closest('.sortable-col');
+  if (!th) return;
+  const tableId = th.dataset.table;
+  const key     = th.dataset.key;
+  if (!tableId || !key) return;
+  if (sortState[tableId].key === key) {
+    sortState[tableId].dir = sortState[tableId].dir === 'asc' ? 'desc' : 'asc';
+  } else {
+    sortState[tableId].key = key;
+    sortState[tableId].dir = 'asc';
+  }
+  applySortIcons(tableId, key);
+  if (tableId === 'pos')    renderPositions(positions);
+  if (tableId === 'closed') renderClosedPositions(closedPositions);
+});
+
 function renderPositions(list) {
   const tbody = document.getElementById('positionsBody');
   document.getElementById('posCount').textContent = list.length;
@@ -672,7 +715,9 @@ function renderPositions(list) {
     return;
   }
 
-  tbody.innerHTML = list.map(p => {
+  const sorted = sortedList(list, 'pos');
+
+  tbody.innerHTML = sorted.map(p => {
     const targetVal = p.target_pct != null ? p.target_pct : '';
 
     // Barra de progreso hacia el objetivo
@@ -682,7 +727,6 @@ function renderPositions(list) {
       progressHTML = `<div class="progress-target"><div class="bar" style="width:${pct.toFixed(1)}%"></div></div>`;
     }
 
-    const sellDisabled = p.sold ? 'disabled' : '';
     const rowClass = p.sold ? 'sold-row' : '';
 
     let actionHTML;
@@ -694,31 +738,34 @@ function renderPositions(list) {
           <i class="bi bi-gift-fill"></i> Canjear
         </button>`;
     } else {
-      actionHTML = `<button class="btn btn-sm btn-outline-danger py-0 px-2 me-1" ${sellDisabled}
+      actionHTML = `<button class="btn btn-sm btn-outline-danger py-0 px-2 me-1" ${p.sold ? 'disabled' : ''}
            onclick="openSellModal('${escHtml(p.token_id)}','${escHtml(p.title)}',${p.size},${p.current_price},${p.cost},${p.net_profit})">
            <i class="bi bi-cash-coin"></i> Vender
          </button>`;
     }
     const hideBtn = `<button class="btn btn-sm btn-outline-secondary py-0 px-1" title="Ocultar esta posición"
-      onclick="hidePosition('${escHtml(p.token_id)}','${escHtml(p.title)}','${escHtml(p.outcome)}',${p.size},${p.avg_price})">
+      onclick="hidePosition('${escHtml(p.token_id)}','${escHtml(p.title)}','${escHtml(p.outcome)}',${p.size},${p.avg_price ?? 0})">
       <i class="bi bi-eye-slash"></i></button>`;
+
+    const netProfitTip = p.cost != null
+      ? `Ingreso neto tras comisión 2%: ${fmtUsdc(p.sell_value)} − coste ${fmtUsdc(p.cost)}`
+      : '';
 
     return `<tr class="${rowClass}" data-token="${escHtml(p.token_id)}">
       <td>${shortTitle(p.title)}</td>
       <td>${outcomeHTML(p.outcome)}</td>
-      <td class="text-end text-secondary">${p.size}</td>
-      <td class="text-end text-secondary">${fmtPrice(p.avg_price)}</td>
-      <td class="text-end">${fmtPrice(p.current_price)}</td>
+      <td class="text-end text-secondary">${p.cost != null ? fmtUsdc(p.cost) : '—'}</td>
       <td class="text-end">${fmtUsdc(p.value)}</td>
       <td class="text-end">
-        <span class="${pnlClass(p.net_profit)}" title="Ingreso neto tras comisión 2%: ${fmtUsdc(p.sell_value)} − coste ${fmtUsdc(p.cost)}">
-          ${p.net_profit >= 0 ? '+' : ''}${fmtUsdc(p.net_profit)}
+        <span class="${pnlClass(p.net_profit)}" title="${netProfitTip}">
+          ${p.net_profit != null ? (p.net_profit >= 0 ? '+' : '') + fmtUsdc(p.net_profit) : '—'}
         </span>
       </td>
       <td class="text-end">
         <span class="${pnlClass(p.pnl_pct)}">${fmtPct(p.pnl_pct)}</span>
         ${progressHTML}
       </td>
+      <td class="text-end text-secondary" style="font-size:.78rem">${p.opened_at ?? '—'}</td>
       <td class="text-center">
         <div class="d-flex align-items-center justify-content-center gap-1">
           <input type="number" step="0.1" min="0" max="10000"
@@ -823,91 +870,12 @@ setInterval(updateBotStatus, 5000);
 // Polling de posiciones cada 5 s (el bot las actualiza cada 1 s)
 setInterval(loadPositions, 5000);
 
-// ── Posiciones ocultas ────────────────────────────────────────────────────
-async function loadHiddenPositions() {
-  try {
-    const r = await fetch('/api/positions/hidden');
-    const list = await r.json();
-    renderHiddenPositions(list);
-  } catch {}
-}
-
-function renderHiddenPositions(list) {
-  const tbody = document.getElementById('hiddenBody');
-  document.getElementById('hiddenCount').textContent = list.length;
-  if (!list.length) {
-    tbody.innerHTML = '<tr><td colspan="7" class="text-secondary text-center py-3">Sin apuestas ocultas</td></tr>';
-    return;
-  }
-  const reasonLabel = { perdida: '<span class="ct-failed">Perdida</span>', manual: '<span class="text-secondary">Manual</span>', '?': '<span class="text-secondary">—</span>' };
-  tbody.innerHTML = list.map(p => `
-    <tr id="hidden-row-${escHtml(p.token_id)}">
-      <td class="text-light" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(p.title)}">${escHtml(p.title)}</td>
-      <td>${outcomeHTML(p.outcome)}</td>
-      <td class="text-end text-secondary">${p.size || '—'}</td>
-      <td class="text-end text-secondary">${p.avg_price ? fmtPrice(p.avg_price) : '—'}</td>
-      <td class="text-end text-secondary">${p.cost ? fmtUsdc(p.cost) : '—'}</td>
-      <td class="text-end" id="hidden-trade-${escHtml(p.token_id)}">${reasonLabel[p.reason] || p.reason}</td>
-      <td class="text-end d-flex gap-1 justify-content-end">
-        <button class="btn btn-sm btn-outline-info py-0 px-2" title="Buscar venta/canje real en blockchain"
-          onclick="checkHiddenTrade('${escHtml(p.token_id)}', this)">🔍</button>
-        <button class="btn btn-sm btn-outline-secondary py-0 px-2" title="Mostrar de nuevo"
-          onclick="unhidePosition('${escHtml(p.token_id)}')">
-          <i class="bi bi-eye"></i>
-        </button>
-      </td>
-    </tr>`).join('');
-}
-
-async function checkHiddenTrade(tokenId, btn) {
-  btn.disabled = true;
-  btn.textContent = '…';
-  try {
-    const r = await fetch(`/api/positions/hidden/${encodeURIComponent(tokenId)}/check-trade`);
-    const d = await r.json();
-    const cell = document.getElementById(`hidden-trade-${tokenId}`);
-    if (!d.ok) {
-      if (cell) cell.innerHTML += ` <span class="text-danger small" title="${escHtml(d.error)}">✗</span>`;
-      btn.textContent = '✗';
-      return;
-    }
-    if (d.found) {
-      const color  = d.price >= 0.5 ? 'var(--green)' : 'var(--yellow)';
-      const label  = d.side === 'SELL' ? 'Vendida' : d.side === 'REDEEM' ? 'Canjeada' : d.side;
-      if (cell) cell.innerHTML =
-        `<span style="color:${color}" title="${label} a ${d.price} × ${d.size} = $${d.usdc}">
-           ${label}: $${d.usdc.toFixed(2)} @ ${d.price}
-         </span>`;
-      btn.remove();
-    } else {
-      if (cell) cell.innerHTML += ' <span class="text-secondary small" title="Sin trades encontrados en la API">sin trades</span>';
-      btn.textContent = '—';
-      btn.disabled = false;
-    }
-  } catch (e) {
-    btn.textContent = '✗';
-    btn.disabled = false;
-  }
-}
-
-async function unhidePosition(tokenId) {
-  await fetch('/api/hide', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ token_id: tokenId, hide: false })
-  });
-  loadPositions();
-  loadHiddenPositions();
-}
-
-setInterval(loadHiddenPositions, 10000);
-
 // ── Historial de apuestas cerradas ────────────────────────────────────────
 async function loadClosedPositions() {
   try {
     const r = await fetch('/api/positions/closed');
-    const list = await r.json();
-    renderClosedPositions(list);
+    closedPositions = await r.json();
+    renderClosedPositions(closedPositions);
   } catch {}
 }
 
@@ -921,7 +889,7 @@ function renderClosedPositions(list) {
   profitEl.style.color = totalProfit >= 0 ? 'var(--green)' : 'var(--red)';
 
   if (!list.length) {
-    tbody.innerHTML = '<tr><td colspan="10" class="text-secondary text-center py-3">Sin historial aún</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="7" class="text-secondary text-center py-3">Sin historial aún</td></tr>';
     return;
   }
 
@@ -932,7 +900,9 @@ function renderClosedPositions(list) {
     reactivada: '<span class="text-secondary">Reactivada</span>',
   };
 
-  tbody.innerHTML = list.map(p => {
+  const sorted = sortedList(list, 'closed');
+
+  tbody.innerHTML = sorted.map(p => {
     const profitClass = p.profit > 0 ? 'pnl-positive' : p.profit < 0 ? 'pnl-negative' : 'pnl-neutral';
     const profitSign  = p.profit > 0 ? '+' : '';
     const verifiedBadge = p.price_verified
@@ -943,14 +913,11 @@ function renderClosedPositions(list) {
            onclick="verifyClosePrice(${p.id}, this)">🔍</button>`
       : '';
     return `<tr id="closed-row-${p.id}">
-      <td class="text-secondary" style="white-space:nowrap">${p.ts}</td>
+      <td class="text-secondary" style="white-space:nowrap;font-size:.78rem">${p.ts}</td>
       <td class="text-light" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(p.title)}">${escHtml(p.title)}</td>
       <td>${outcomeHTML(p.outcome)}</td>
-      <td class="text-end text-secondary">${p.size}</td>
-      <td class="text-end text-secondary">${fmtPrice(p.avg_price)}</td>
-      <td class="text-end text-secondary">${p.close_price ? fmtPrice(p.close_price) : '—'}${verifiedBadge}</td>
       <td class="text-end text-secondary">${fmtUsdc(p.cost)}</td>
-      <td class="text-end text-secondary">${p.type !== 'perdida' ? fmtUsdc(p.revenue) : '—'}</td>
+      <td class="text-end text-secondary">${p.type !== 'perdida' ? fmtUsdc(p.revenue) : '—'}${verifiedBadge}</td>
       <td class="text-end ${profitClass}" id="closed-profit-${p.id}">${profitSign}${fmtUsdc(p.profit)}</td>
       <td class="text-end">${typeLabel[p.type] || p.type}${verifyBtn}</td>
     </tr>`;
@@ -972,19 +939,17 @@ async function verifyClosePrice(rowId, btn) {
     const row = document.getElementById(`closed-row-${rowId}`);
     if (row) {
       const cells = row.querySelectorAll('td');
-      // close_price (index 5)
-      cells[5].innerHTML = fmtPrice(d.close_price) +
+      // cost (index 3)
+      cells[3].textContent = fmtUsdc(d.cost);
+      // revenue (index 4) — add verified badge
+      cells[4].innerHTML = fmtUsdc(d.revenue) +
         '<span class="badge bg-success ms-1" title="Precio real verificado en blockchain">✓</span>';
-      // cost (index 6)
-      cells[6].textContent = fmtUsdc(d.cost);
-      // revenue (index 7)
-      cells[7].textContent = fmtUsdc(d.revenue);
-      // profit (index 8)
+      // profit (index 5)
       const pClass = d.profit > 0 ? 'pnl-positive' : d.profit < 0 ? 'pnl-negative' : 'pnl-neutral';
       const pSign  = d.profit > 0 ? '+' : '';
-      cells[8].className = `text-end ${pClass}`;
-      cells[8].textContent = pSign + fmtUsdc(d.profit);
-      // remove verify button
+      cells[5].className = `text-end ${pClass}`;
+      cells[5].textContent = pSign + fmtUsdc(d.profit);
+      // remove verify button from type cell (index 6)
       btn.remove();
     }
   } catch (e) {
@@ -1045,7 +1010,6 @@ async function hidePosition(tokenId, title, outcome, size, avgPrice) {
   });
   appendLogs([`[ocultar] "${title.substring(0,50)}" ocultada`]);
   loadPositions();
-  loadHiddenPositions();
 }
 
 // ── Modal de venta manual ─────────────────────────────────────────────────
@@ -1119,15 +1083,43 @@ const style = document.createElement('style');
 style.textContent = `
   @keyframes spin { to { transform: rotate(360deg); } }
   .spin { display:inline-block; animation: spin .7s linear infinite; }
+  #toastContainer { position:fixed; bottom:1.25rem; right:1.25rem; z-index:9999; display:flex; flex-direction:column; gap:.5rem; }
+  .app-toast { min-width:280px; max-width:380px; padding:.65rem 1rem; border-radius:8px; font-size:.83rem;
+    color:#fff; box-shadow:0 4px 16px rgba(0,0,0,.5); display:flex; align-items:center; gap:.6rem;
+    animation: toastIn .2s ease; }
+  @keyframes toastIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:none; } }
+  .app-toast.success { background:#166534; border-left:3px solid var(--green); }
+  .app-toast.warning { background:#713f12; border-left:3px solid var(--yellow); }
+  .app-toast.error   { background:#7f1d1d; border-left:3px solid var(--red); }
+  .app-toast.info    { background:#1e3a5f; border-left:3px solid #60a5fa; }
 `;
 document.head.appendChild(style);
+
+// ── Toast helper ───────────────────────────────────────────────────────────
+(function () {
+  const container = document.createElement('div');
+  container.id = 'toastContainer';
+  document.body.appendChild(container);
+
+  window.showToast = function (msg, type = 'info', duration = 4000) {
+    const icons = { success: '✓', warning: '⚠', error: '✗', info: 'ℹ' };
+    const el = document.createElement('div');
+    el.className = `app-toast ${type}`;
+    el.innerHTML = `<span style="font-size:1rem">${icons[type] || 'ℹ'}</span><span>${msg}</span>`;
+    container.appendChild(el);
+    setTimeout(() => {
+      el.style.transition = 'opacity .3s';
+      el.style.opacity = '0';
+      setTimeout(() => el.remove(), 320);
+    }, duration);
+  };
+})();
 
 // ── Init ───────────────────────────────────────────────────────────────────
 (async function init() {
   await loadConfig();
   await updateBotStatus();
   await loadPositions();
-  await loadHiddenPositions();
   await loadClosedPositions();
   await loadCopySettings();
   await loadCopyProfiles();
@@ -1219,9 +1211,9 @@ async function loadCopySettings() {
   try {
     const r = await fetch('/api/copy/settings');
     const s = await r.json();
-    document.getElementById('copyMode').value = s.mode || 'proportional';
-    document.getElementById('fixedAmount').value = s.fixed_amount || 5;
-    document.getElementById('dailyBudget').value = s.daily_budget || 50;
+    document.getElementById('copyMode').value = s.mode || 'fixed';
+    document.getElementById('fixedAmount').value = s.fixed_amount ?? 1;
+    document.getElementById('dailyBudget').value = s.daily_budget ?? 20;
     document.getElementById('fixedAmountCol').style.display =
       s.mode === 'fixed' ? '' : 'none';
     updateBudgetDisplay(s.spent_today || 0, s.daily_budget || 50, s.remaining || 50);
@@ -1229,8 +1221,10 @@ async function loadCopySettings() {
 }
 
 document.getElementById('copyMode').addEventListener('change', function () {
-  document.getElementById('fixedAmountCol').style.display =
-    this.value === 'fixed' ? '' : 'none';
+  const isFixed = this.value === 'fixed';
+  document.getElementById('fixedAmountCol').style.display = isFixed ? '' : 'none';
+  const label = isFixed ? 'Cantidad fija por trade' : 'Proporcional a su cartera';
+  showToast(`Modo cambiado a: ${label}. Pulsa Guardar para aplicarlo.`, 'warning');
 });
 
 async function saveCopySettings() {
@@ -1256,6 +1250,13 @@ async function saveCopySettings() {
     msg.innerHTML = `<span class="text-danger small">Error: ${e}</span>`;
   }
 }
+
+document.getElementById('resetBudgetBtn').addEventListener('click', async () => {
+  if (!confirm('¿Reiniciar el gastado de hoy a $0?')) return;
+  const r = await fetch('/api/copy/budget/reset', { method: 'POST' });
+  const d = await r.json();
+  if (d.ok) await updateCopyStatus();
+});
 
 function updateBudgetDisplay(spent, daily, remaining) {
   document.getElementById('spentToday').textContent    = `$${spent.toFixed(2)}`;

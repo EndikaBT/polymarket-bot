@@ -51,9 +51,9 @@ state = {
     "copy_positions": {},  # token_id -> {size, market, profile, bought_at}
     "copy_settings": {
         # spent_today / budget_date removed — live in daily_budget table
-        "mode": "proportional",
-        "fixed_amount": 5.0,
-        "daily_budget": 50.0,
+        "mode": "fixed",
+        "fixed_amount": 1.0,
+        "daily_budget": 20.0,
     },
     "copy_running": False,
     "copy_thread": None,
@@ -586,6 +586,14 @@ def enrich_positions(raw_positions: list) -> list:
         if already_redeemed:
             continue
 
+        # Fecha de apertura — disponible para copytrades
+        copy_entry = state["copy_positions"].get(token_id)
+        bought_at_ts = copy_entry.get("bought_at") if copy_entry else None
+        opened_at = (
+            datetime.fromtimestamp(bought_at_ts).strftime("%Y-%m-%d %H:%M")
+            if bought_at_ts else None
+        )
+
         result.append(
             {
                 "token_id":          token_id,
@@ -606,6 +614,7 @@ def enrich_positions(raw_positions: list) -> list:
                 "outcome_index":     outcome_index,
                 "auto_sell_active":  target is not None and not already_sold and avg_price_reliable,
                 "sold":              already_sold,
+                "opened_at":         opened_at,
             }
         )
     return result
@@ -787,9 +796,13 @@ def check_and_redeem():
                                       pos.get("condition_id", ""),
                                       pos.get("outcome_index", -1))
             if ok:
+                # Use avg_price_cache as fallback when pos["avg_price"] is None
+                avg_p = pos.get("avg_price") or state["avg_price_cache"].get(token_id, 0)
+                size  = pos.get("size", 0)
                 record_close(pos["title"], pos.get("outcome", ""),
-                             pos.get("size", 0), pos.get("avg_price") or 0,
-                             1.0, "canjeada")
+                             size, avg_p, 1.0, "canjeada", token_id)
+                credit_budget(size, 1.0)  # canjeada = recibe 1 USDC por token
+                log(f"[redeem] ✓ Registrado en historial: {pos['title'][:45]}")
         finally:
             state["_redeeming"] = False
         break  # one per call — next cycle handles the rest
@@ -1531,9 +1544,11 @@ def api_redeem():
     outcome_index = int(data.get("outcome_index", -1))
     ok, msg       = redeem_position(token_id, title, condition_id, outcome_index)
     if ok:
-        pos = next((p for p in state["positions"] if p["token_id"] == token_id), {})
-        record_close(title, pos.get("outcome", ""), pos.get("size", 0),
-                     pos.get("avg_price") or 0, 1.0, "canjeada")
+        pos  = next((p for p in state["positions"] if p["token_id"] == token_id), {})
+        size = float(pos.get("size") or 0)
+        avg_p = pos.get("avg_price") or state["avg_price_cache"].get(token_id, 0)
+        record_close(title, pos.get("outcome", ""), size, avg_p, 1.0, "canjeada", token_id)
+        credit_budget(size, 1.0)  # canjeada = recibe 1 USDC por token
     return jsonify({"ok": ok, "error": msg if not ok else "", "tx": msg if ok else ""})
 
 
@@ -1719,9 +1734,9 @@ def api_copy_get_settings():
     remaining = get_remaining_budget()
     return jsonify(
         {
-            "mode":         s.get("mode", "proportional"),
-            "fixed_amount": s.get("fixed_amount", 5.0),
-            "daily_budget": s.get("daily_budget", 50.0),
+            "mode":         s.get("mode", "fixed"),
+            "fixed_amount": s.get("fixed_amount", 1.0),
+            "daily_budget": s.get("daily_budget", 20.0),
             "spent_today":  round(spent, 2),
             "remaining":    round(remaining, 2),
         }
@@ -1749,6 +1764,20 @@ def api_copy_update_settings():
         s["daily_budget"] = v
 
     save_config()
+    return jsonify({"ok": True, "remaining": round(get_remaining_budget(), 2)})
+
+
+@app.route("/api/copy/budget/reset", methods=["POST"])
+def api_budget_reset():
+    """Reset today's spent to zero."""
+    today = date.today().isoformat()
+    with _db_lock:
+        with _db_conn() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO daily_budget (date, spent) VALUES (?, 0.0)",
+                (today,)
+            )
+    log("[budget] Gastado hoy reiniciado a $0")
     return jsonify({"ok": True, "remaining": round(get_remaining_budget(), 2)})
 
 
@@ -1925,7 +1954,7 @@ def api_copy_status():
             "running":          state["copy_running"],
             "profile_count":    sum(1 for p in state["copy_profiles"].values() if p.get("active")),
             "spent_today":      round(spent, 2),
-            "daily_budget":     s.get("daily_budget", 50.0),
+            "daily_budget":     s.get("daily_budget", 20.0),
             "remaining_budget": round(get_remaining_budget(), 2),
         }
     )
