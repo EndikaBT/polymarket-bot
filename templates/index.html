@@ -416,6 +416,7 @@
           <tbody id="closedBody">
             <tr><td colspan="7" class="text-secondary text-center py-3">Sin historial aún</td></tr>
           </tbody>
+          <tfoot id="closedFooter"></tfoot>
         </table>
       </div>
     </div>
@@ -872,17 +873,25 @@ setInterval(updateBotStatus, 5000);
 setInterval(loadPositions, 5000);
 
 // ── Historial de apuestas cerradas ────────────────────────────────────────
-async function loadClosedPositions() {
+let closedTotal = 0;   // total rows in DB
+
+async function loadClosedPositions(limit = 10, offset = 0) {
   try {
-    const r = await fetch('/api/positions/closed');
-    closedPositions = await r.json();
-    renderClosedPositions(closedPositions);
+    const r = await fetch(`/api/positions/closed?limit=${limit}&offset=${offset}`);
+    const d = await r.json();
+    closedTotal = d.total ?? 0;
+    if (offset === 0) {
+      closedPositions = d.rows ?? [];
+    } else {
+      closedPositions = closedPositions.concat(d.rows ?? []);
+    }
+    renderClosedPositions(closedPositions, closedTotal);
   } catch {}
 }
 
-function renderClosedPositions(list) {
+function renderClosedPositions(list, total) {
   const tbody = document.getElementById('closedBody');
-  document.getElementById('closedCount').textContent = list.length;
+  document.getElementById('closedCount').textContent = total ?? list.length;
 
   const totalProfit = list.reduce((s, p) => s + (p.profit || 0), 0);
   const profitEl = document.getElementById('closedTotalProfit');
@@ -923,6 +932,19 @@ function renderClosedPositions(list) {
       <td class="text-end">${typeLabel[p.type] || p.type}${verifyBtn}</td>
     </tr>`;
   }).join('');
+
+  // "Ver más" button
+  const totalRows = total ?? closedTotal;
+  const remaining = totalRows - list.length;
+  const footer    = document.getElementById('closedFooter');
+  if (remaining > 0) {
+    footer.innerHTML = `<tr><td colspan="7" class="text-center py-2">
+      <button class="btn btn-sm btn-outline-secondary" onclick="loadMoreClosed(${list.length})">
+        Ver más — ${remaining} más sin mostrar
+      </button></td></tr>`;
+  } else {
+    footer.innerHTML = '';
+  }
 }
 
 async function verifyClosePrice(rowId, btn) {
@@ -959,7 +981,12 @@ async function verifyClosePrice(rowId, btn) {
   }
 }
 
-setInterval(loadClosedPositions, 15000);
+async function loadMoreClosed(offset) {
+  await loadClosedPositions(500, offset);  // load up to 500 more
+}
+
+// Polling: only refresh the first 10 (don't overwrite if user expanded)
+setInterval(() => loadClosedPositions(10, 0), 30000);
 
 // ── Configuración ──────────────────────────────────────────────────────────
 async function loadConfig() {
@@ -1166,13 +1193,20 @@ document.head.appendChild(style);
 
 // ── Init ───────────────────────────────────────────────────────────────────
 (async function init() {
-  await loadConfig();
-  await updateBotStatus();
+  // Phase 1 — config + bot status (instant, no external API)
+  await Promise.all([loadConfig(), updateBotStatus()]);
+
+  // Phase 2 — open positions FIRST (most important, show ASAP)
   await loadPositions();
-  await loadClosedPositions();
-  await loadCopySettings();
-  await loadCopyProfiles();
-  await updateCopyStatus();
+
+  // Phase 3 — everything else in parallel (stats, historial, copy)
+  Promise.all([
+    loadSessionStats(),
+    loadClosedPositions(),
+    loadCopySettings(),
+    loadCopyProfiles(),
+    updateCopyStatus(),
+  ]);
 })();
 
 // ── Copy Trading ────────────────────────────────────────────────────────────
@@ -1453,7 +1487,6 @@ async function loadSessionStats() {
   } catch {}
 }
 
-loadSessionStats();
 setInterval(loadSessionStats, 30000);
 </script>
 </body>
