@@ -51,9 +51,9 @@ state = {
     "copy_positions": {},  # token_id -> {size, market, profile, bought_at}
     "copy_settings": {
         # spent_today / budget_date removed — live in daily_budget table
-        "mode": "proportional",
-        "fixed_amount": 5.0,
-        "daily_budget": 50.0,
+        "mode": "fixed",
+        "fixed_amount": 1.0,
+        "daily_budget": 20.0,
     },
     "copy_running": False,
     "copy_thread": None,
@@ -1734,9 +1734,9 @@ def api_copy_get_settings():
     remaining = get_remaining_budget()
     return jsonify(
         {
-            "mode":         s.get("mode", "proportional"),
-            "fixed_amount": s.get("fixed_amount", 5.0),
-            "daily_budget": s.get("daily_budget", 50.0),
+            "mode":         s.get("mode", "fixed"),
+            "fixed_amount": s.get("fixed_amount", 1.0),
+            "daily_budget": s.get("daily_budget", 20.0),
             "spent_today":  round(spent, 2),
             "remaining":    round(remaining, 2),
         }
@@ -1954,7 +1954,7 @@ def api_copy_status():
             "running":          state["copy_running"],
             "profile_count":    sum(1 for p in state["copy_profiles"].values() if p.get("active")),
             "spent_today":      round(spent, 2),
-            "daily_budget":     s.get("daily_budget", 50.0),
+            "daily_budget":     s.get("daily_budget", 20.0),
             "remaining_budget": round(get_remaining_budget(), 2),
         }
     )
