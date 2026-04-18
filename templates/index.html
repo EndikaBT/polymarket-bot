@@ -492,7 +492,12 @@
     <!-- Budget bar -->
     <div class="card-body py-2 border-bottom" style="border-color:var(--card-border)!important">
       <div class="d-flex justify-content-between align-items-center mb-1">
-        <span class="text-secondary small">Presupuesto hoy</span>
+        <div class="d-flex align-items-center gap-2">
+          <span class="text-secondary small">Presupuesto hoy</span>
+          <button id="resetBudgetBtn" class="btn btn-outline-secondary py-0 px-2" style="font-size:.7rem;line-height:1.4" title="Reiniciar gastado hoy a $0">
+            <i class="bi bi-arrow-counterclockwise"></i> Reset
+          </button>
+        </div>
         <span class="small">
           <span id="spentToday" class="text-light fw-bold">$0.00</span>
           <span class="text-secondary"> gastado · </span>
@@ -1214,6 +1219,13 @@ async function saveCopySettings() {
     msg.innerHTML = `<span class="text-danger small">Error: ${e}</span>`;
   }
 }
+
+document.getElementById('resetBudgetBtn').addEventListener('click', async () => {
+  if (!confirm('¿Reiniciar el gastado de hoy a $0?')) return;
+  const r = await fetch('/api/copy/budget/reset', { method: 'POST' });
+  const d = await r.json();
+  if (d.ok) await updateCopyStatus();
+});
 
 function updateBudgetDisplay(spent, daily, remaining) {
   document.getElementById('spentToday').textContent    = `$${spent.toFixed(2)}`;
