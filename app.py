@@ -1,17 +1,131 @@
+import hmac
 import json
 import math
 import os
 import random
 import re
+import secrets
 import sqlite3
 import threading
 import time
-from datetime import date, datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import date, datetime, timedelta
+from functools import wraps
 
 import requests
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, redirect, render_template, request, session, url_for
+from werkzeug.security import check_password_hash, generate_password_hash
 
 app = Flask(__name__)
+
+# ─── Cookie / session security ────────────────────────────────────────────────
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+)
+
+# ─── Auth helpers ─────────────────────────────────────────────────────────────
+
+_login_lock     = threading.Lock()
+_login_attempts: dict = {}   # ip -> [timestamp, ...]
+MAX_ATTEMPTS    = 5
+LOCKOUT_SECONDS = 15 * 60   # 15 min
+
+
+def _get_or_create_secret_key() -> str:
+    """Load secret key from DB, or generate + store one on first run."""
+    with _db_conn() as conn:
+        row = conn.execute("SELECT value FROM kv WHERE key='secret_key'").fetchone()
+    if row:
+        return row["value"]
+    key = secrets.token_hex(32)
+    with _db_lock:
+        with _db_conn() as conn:
+            conn.execute("INSERT OR IGNORE INTO kv VALUES ('secret_key', ?)", (key,))
+    return key
+
+
+def _rate_limit_check(ip: str) -> tuple:
+    """Returns (allowed: bool, wait_seconds: int)."""
+    now = time.time()
+    with _login_lock:
+        ts = [t for t in _login_attempts.get(ip, []) if now - t < LOCKOUT_SECONDS]
+        _login_attempts[ip] = ts
+        if len(ts) >= MAX_ATTEMPTS:
+            return False, int(LOCKOUT_SECONDS - (now - ts[0]))
+        return True, 0
+
+
+def _record_failed(ip: str):
+    with _login_lock:
+        _login_attempts.setdefault(ip, []).append(time.time())
+
+
+def _clear_attempts(ip: str):
+    with _login_lock:
+        _login_attempts.pop(ip, None)
+
+
+def _get_csrf_token() -> str:
+    """Return (and lazily create) the per-session CSRF token."""
+    if "csrf_token" not in session:
+        session["csrf_token"] = secrets.token_hex(32)
+    return session["csrf_token"]
+
+
+def _verify_csrf() -> bool:
+    """Check CSRF token for state-changing requests."""
+    token = session.get("csrf_token")
+    if not token:
+        return False
+    # Accept from header (AJAX) or form field
+    candidate = request.headers.get("X-CSRF-Token") or request.form.get("_csrf", "")
+    return hmac.compare_digest(token, candidate)
+
+
+@app.context_processor
+def inject_csrf():
+    return {"csrf_token": _get_csrf_token}
+
+
+@app.before_request
+def check_auth():
+    """Redirect unauthenticated requests to /login. API routes get 401.
+    Also enforces CSRF on all authenticated state-changing requests."""
+    # /login is the only truly public endpoint (no auth, no CSRF needed)
+    # /static serves files (Flask built-in, harmless)
+    # /logout requires CSRF verification even if session happens to be gone
+    if request.endpoint in ("login", "static"):
+        _get_csrf_token()   # seed token so login form can embed it
+        return
+
+    # Logout: verify CSRF but don't require an active session
+    # (worst case an unauthenticated POST just clears an empty session)
+    if request.endpoint == "logout":
+        if not _verify_csrf():
+            return redirect(url_for("login"))
+        return
+
+    if not session.get("authenticated"):
+        if request.path.startswith("/api/"):
+            return jsonify({"ok": False, "error": "No autenticado"}), 401
+        return redirect(url_for("login"))
+
+    # CSRF check for every non-GET authenticated request
+    if request.method not in ("GET", "HEAD", "OPTIONS"):
+        if not _verify_csrf():
+            if request.path.startswith("/api/"):
+                return jsonify({"ok": False, "error": "CSRF inválido"}), 403
+            return redirect(url_for("login"))
+
+
+@app.after_request
+def security_headers(response):
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    return response
+
 
 # ─── Paths ────────────────────────────────────────────────────────────────────
 
@@ -39,6 +153,7 @@ state = {
     "avg_price_cache": {},  # token_id -> float: first reliable avgPrice seen, never overwritten with suspicious values
     "hidden_tokens": set(),
     "hidden_positions": {},  # token_id -> {title, outcome, size, avg_price, cost, reason}
+    "_hidden_check_ts": {},  # token_id -> float: last time recovery was checked
     # closed_positions and copy_trades removed — live in DB
     "session": {            # resets on every server restart
         "profit": 0.0,
@@ -476,8 +591,16 @@ def get_best_bid(token_id: str) -> float:
     return 0.0
 
 
+HIDDEN_RECOVERY_TTL = 60.0  # seconds between recovery checks for hidden positions
+
+
 def enrich_positions(raw_positions: list) -> list:
-    result = []
+    now = time.time()
+
+    # ── Pass 1: parse metadata, decide which tokens need a price fetch ────────
+    parsed     = []   # list of dicts with pre-parsed fields
+    fetch_ids  = []   # token_ids that need get_best_bid()
+
     for raw in raw_positions:
         token_id = (
             raw.get("asset") or raw.get("tokenId") or
@@ -487,72 +610,103 @@ def enrich_positions(raw_positions: list) -> list:
         avg_price_api = float(raw.get("avgPrice") or raw.get("averagePrice") or 0)
         cur_price_api = float(raw.get("curPrice") or 0)
 
-        # ── avgPrice reliability cache ────────────────────────────────────────
-        # The Data API sometimes returns avgPrice ≈ 0 or wildly wrong values
-        # (sync lag after a buy). We keep the highest reliable value we've ever
-        # seen per token so P&L doesn't swing between -50% and +450%.
-        #
-        # "Reliable" = avg_price_api >= 0.01.  We update the cache only when the
-        # new API value is higher than what we have cached (a lower value is more
-        # likely to be a sync artefact than a genuine price change).
+        if size < DUST_THRESHOLD:
+            continue
+        if token_id in state["redeemed_tokens"]:
+            continue
+
+        # avgPrice cache
         cache = state["avg_price_cache"]
-        if avg_price_api >= 0.01:
-            if avg_price_api > cache.get(token_id, 0.0):
-                cache[token_id] = avg_price_api
-        avg_price         = cache.get(token_id, avg_price_api)
+        if avg_price_api >= 0.01 and avg_price_api > cache.get(token_id, 0.0):
+            cache[token_id] = avg_price_api
+        avg_price          = cache.get(token_id, avg_price_api)
         avg_price_reliable = avg_price >= 0.01
-        redeemable    = bool(raw.get("redeemable", False))
-        condition_id  = raw.get("conditionId", "")
-        outcome_index = int(raw.get("outcomeIndex", 0))
+
         title = (
             raw.get("title") or raw.get("question") or
             raw.get("slug") or (f"{token_id[:20]}…" if token_id else "Desconocido")
         )
-        outcome = raw.get("outcome") or raw.get("side") or ""
 
-        if size < DUST_THRESHOLD:
-            continue
+        entry = {
+            "token_id":      token_id,
+            "size":          size,
+            "avg_price":     avg_price,
+            "avg_price_reliable": avg_price_reliable,
+            "cur_price_api": cur_price_api,
+            "title":         title,
+            "outcome":       raw.get("outcome") or raw.get("side") or "",
+            "redeemable":    bool(raw.get("redeemable", False)),
+            "condition_id":  raw.get("conditionId", ""),
+            "outcome_index": int(raw.get("outcomeIndex", 0)),
+            "is_hidden":     False,
+            "hidden_meta":   None,
+        }
 
-        # ── Hidden-token recovery check ──────────────────────────────────────
-        # If the token was auto-hidden because price fell below 0.01 but the
-        # market has since recovered (e.g. temporary dip / bad data), unhide it
-        # and cancel the previously recorded loss so P&L stays accurate.
         if token_id in state["hidden_tokens"]:
             meta   = state["hidden_positions"].get(token_id, {})
             reason = meta.get("reason", "")
-            # Only auto-unhide positions that were hidden by the bot (reason="perdida").
-            # Manually hidden positions (reason="manual") stay hidden.
-            if reason == "perdida":
-                time.sleep(0.1)
-                recovery_price = get_best_bid(token_id)
-                if recovery_price >= 0.05:  # recovered enough to be meaningful
-                    _delete_hidden(token_id)
-                    # Insert a corrective record to cancel the previously booked loss
-                    # (we recorded close_price=0 when hiding, so cost was fully lost)
-                    corrective_profit = round(meta.get("size", 0) * meta.get("avg_price", 0), 2)
-                    with _db_lock:
-                        with _db_conn() as conn:
-                            conn.execute(
-                                "INSERT INTO closed_positions "
-                                "(ts, title, outcome, size, avg_price, close_price, cost, revenue, profit, type) "
-                                "VALUES (?,?,?,?,?,?,?,?,?,?)",
-                                (datetime.now().strftime("%Y-%m-%d %H:%M"),
-                                 title, outcome,
-                                 meta.get("size", 0), meta.get("avg_price", 0),
-                                 0.0, 0.0, 0.0,
-                                 corrective_profit,   # positive: cancels the original loss
-                                 "reactivada")
-                            )
-                    log(f"[bot] Posición reactivada (precio recuperado a {recovery_price:.3f}): {title[:45]}")
-                    # Fall through — let this position be enriched normally below
-                else:
-                    continue  # still worthless, keep hidden
-            else:
-                continue  # manually hidden, always skip
+            if reason != "perdida":
+                continue  # manually hidden — skip entirely, no API call
+            # Rate-limit recovery checks to once per HIDDEN_RECOVERY_TTL
+            last = state["_hidden_check_ts"].get(token_id, 0.0)
+            if now - last < HIDDEN_RECOVERY_TTL:
+                continue   # checked recently, still skip
+            entry["is_hidden"]   = True
+            entry["hidden_meta"] = meta
+            fetch_ids.append(token_id)
+        else:
+            fetch_ids.append(token_id)
 
-        time.sleep(0.1)
-        live_price = get_best_bid(token_id)
-        current    = live_price if live_price > 0 else cur_price_api
+        parsed.append(entry)
+
+    # ── Pass 2: fetch all prices in parallel ──────────────────────────────────
+    prices: dict[str, float] = {}
+    if fetch_ids:
+        with ThreadPoolExecutor(max_workers=min(len(fetch_ids), 12)) as ex:
+            futures = {ex.submit(get_best_bid, tid): tid for tid in fetch_ids}
+            for future in as_completed(futures):
+                tid = futures[future]
+                try:
+                    prices[tid] = future.result()
+                except Exception:
+                    prices[tid] = 0.0
+
+    # ── Pass 3: process results ───────────────────────────────────────────────
+    result = []
+    for entry in parsed:
+        token_id      = entry["token_id"]
+        live_price    = prices.get(token_id, 0.0)
+        size          = entry["size"]
+        avg_price     = entry["avg_price"]
+        avg_price_reliable = entry["avg_price_reliable"]
+        title         = entry["title"]
+        outcome       = entry["outcome"]
+        cur_price_api = entry["cur_price_api"]
+
+        if entry["is_hidden"]:
+            # Update TTL regardless of result
+            state["_hidden_check_ts"][token_id] = now
+            meta = entry["hidden_meta"]
+            if live_price >= 0.05:
+                _delete_hidden(token_id)
+                corrective_profit = round(meta.get("size", 0) * meta.get("avg_price", 0), 2)
+                with _db_lock:
+                    with _db_conn() as conn:
+                        conn.execute(
+                            "INSERT INTO closed_positions "
+                            "(ts, title, outcome, size, avg_price, close_price, cost, revenue, profit, type) "
+                            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                            (datetime.now().strftime("%Y-%m-%d %H:%M"),
+                             title, outcome,
+                             meta.get("size", 0), meta.get("avg_price", 0),
+                             0.0, 0.0, 0.0, corrective_profit, "reactivada")
+                        )
+                log(f"[bot] Posición reactivada (precio recuperado a {live_price:.3f}): {title[:45]}")
+                # fall through — enrich normally below
+            else:
+                continue  # still worthless
+
+        current = live_price if live_price > 0 else cur_price_api
 
         # Auto-hide worthless losing positions
         if current < 0.01:
@@ -580,43 +734,38 @@ def enrich_positions(raw_positions: list) -> list:
         sell_value = round(size * current * (1 - TAKER_FEE), 2)
         net_profit = round(sell_value - cost, 2) if cost is not None else None
 
-        target           = state["profit_targets"].get(token_id)
-        already_sold     = token_id in state["sold_tokens"]
-        already_redeemed = token_id in state["redeemed_tokens"]
-        if already_redeemed:
-            continue
+        target       = state["profit_targets"].get(token_id)
+        already_sold = token_id in state["sold_tokens"]
 
         # Fecha de apertura — disponible para copytrades
-        copy_entry = state["copy_positions"].get(token_id)
+        copy_entry   = state["copy_positions"].get(token_id)
         bought_at_ts = copy_entry.get("bought_at") if copy_entry else None
-        opened_at = (
+        opened_at    = (
             datetime.fromtimestamp(bought_at_ts).strftime("%Y-%m-%d %H:%M")
             if bought_at_ts else None
         )
 
-        result.append(
-            {
-                "token_id":          token_id,
-                "title":             title,
-                "outcome":           outcome,
-                "size":              round(size, 4),
-                "avg_price":         round(avg_price, 4) if avg_price_reliable else None,
-                "avg_price_reliable": avg_price_reliable,
-                "current_price":     round(current, 4),
-                "value":             round(size * current, 2),
-                "cost":              cost,
-                "sell_value":        sell_value,
-                "net_profit":        net_profit,
-                "pnl_pct":           round(pnl_pct, 2) if pnl_pct is not None else None,
-                "target_pct":        target,
-                "redeemable":        redeemable,
-                "condition_id":      condition_id,
-                "outcome_index":     outcome_index,
-                "auto_sell_active":  target is not None and not already_sold and avg_price_reliable,
-                "sold":              already_sold,
-                "opened_at":         opened_at,
-            }
-        )
+        result.append({
+            "token_id":           token_id,
+            "title":              title,
+            "outcome":            outcome,
+            "size":               round(size, 4),
+            "avg_price":          round(avg_price, 4) if avg_price_reliable else None,
+            "avg_price_reliable": avg_price_reliable,
+            "current_price":      round(current, 4),
+            "value":              round(size * current, 2),
+            "cost":               cost,
+            "sell_value":         sell_value,
+            "net_profit":         net_profit,
+            "pnl_pct":            round(pnl_pct, 2) if pnl_pct is not None else None,
+            "target_pct":         target,
+            "redeemable":         entry["redeemable"],
+            "condition_id":       entry["condition_id"],
+            "outcome_index":      entry["outcome_index"],
+            "auto_sell_active":   target is not None and not already_sold and avg_price_reliable,
+            "sold":               already_sold,
+            "opened_at":          opened_at,
+        })
     return result
 
 
@@ -1383,11 +1532,15 @@ def api_hide():
 
 @app.route("/api/positions/closed", methods=["GET"])
 def api_closed_positions():
+    limit  = int(request.args.get("limit",  10))
+    offset = int(request.args.get("offset",  0))
     with _db_conn() as conn:
-        rows = conn.execute(
-            "SELECT * FROM closed_positions ORDER BY id DESC LIMIT 500"
+        total = conn.execute("SELECT COUNT(*) FROM closed_positions").fetchone()[0]
+        rows  = conn.execute(
+            "SELECT * FROM closed_positions ORDER BY id DESC LIMIT ? OFFSET ?",
+            (limit, offset)
         ).fetchall()
-    return jsonify([dict(r) for r in rows])
+    return jsonify({"rows": [dict(r) for r in rows], "total": total})
 
 
 @app.route("/api/positions/closed/<int:row_id>/verify", methods=["POST"])
@@ -1552,16 +1705,35 @@ def api_redeem():
     return jsonify({"ok": ok, "error": msg if not ok else "", "tx": msg if ok else ""})
 
 
+SLIPPAGE_WARN = 0.08  # warn if fresh price is >8% below the UI price
+
 @app.route("/api/sell", methods=["POST"])
 def api_sell():
     data     = request.get_json(force=True)
     token_id = data.get("token_id")
     size     = data.get("size")
     price    = data.get("price")
+    force    = bool(data.get("force", False))   # bypass slippage check
     if not token_id or not size:
         return jsonify({"ok": False, "error": "token_id y size requeridos"})
     size_f  = float(size)
     price_f = float(price) if price else 0.0
+
+    # ── Slippage pre-check (skip when force=True) ─────────────────────────
+    if price_f > 0 and not force:
+        fresh = get_best_bid(token_id)
+        if fresh > 0 and fresh < price_f * (1 - SLIPPAGE_WARN):
+            drop_pct = round((price_f - fresh) / price_f * 100, 1)
+            log(f"[sell] Slippage detectado en '{token_id[:20]}': "
+                f"UI={price_f:.4f} actual={fresh:.4f} (−{drop_pct}%)")
+            return jsonify({
+                "ok":          False,
+                "slippage":    True,
+                "sent_price":  round(price_f, 4),
+                "fresh_price": round(fresh, 4),
+                "diff_pct":    drop_pct,
+            })
+
     pos     = next((p for p in state["positions"] if p["token_id"] == token_id), {})
     sell_ts = time.time()
     ok, msg = sell_position(token_id, size_f, price_f if price_f > 0 else None)
@@ -1960,6 +2132,89 @@ def api_copy_status():
     )
 
 
+# ─── Auth routes ──────────────────────────────────────────────────────────────
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    with _db_conn() as conn:
+        row = conn.execute("SELECT value FROM kv WHERE key='password_hash'").fetchone()
+    has_password = row is not None
+    error = None
+
+    if request.method == "POST":
+        ip = request.remote_addr or "unknown"
+
+        if not has_password:
+            # First-run setup
+            pw  = request.form.get("password", "")
+            pw2 = request.form.get("password2", "")
+            if len(pw) < 8:
+                error = "La contraseña debe tener mínimo 8 caracteres"
+            elif pw != pw2:
+                error = "Las contraseñas no coinciden"
+            else:
+                h = generate_password_hash(pw)
+                with _db_lock:
+                    with _db_conn() as conn:
+                        conn.execute("INSERT OR REPLACE INTO kv VALUES ('password_hash', ?)", (h,))
+                session.clear()
+                session["authenticated"] = True
+                session["csrf_token"] = secrets.token_hex(32)
+                session.permanent = True
+                return redirect(url_for("index"))
+        else:
+            allowed, wait = _rate_limit_check(ip)
+            if not allowed:
+                m, s = divmod(wait, 60)
+                error = f"Demasiados intentos. Espera {m}m {s}s"
+            else:
+                pw = request.form.get("password", "")
+                if check_password_hash(row["value"], pw):
+                    _clear_attempts(ip)
+                    session.clear()
+                    session["authenticated"] = True
+                    session["csrf_token"] = secrets.token_hex(32)
+                    session.permanent = True
+                    return redirect(url_for("index"))
+                else:
+                    _record_failed(ip)
+                    remaining = MAX_ATTEMPTS - len(_login_attempts.get(ip, []))
+                    error = f"Contraseña incorrecta — {max(0, remaining)} intentos restantes"
+
+    return render_template("login.html", has_password=has_password, error=error)
+
+
+@app.route("/api/auth/change-password", methods=["POST"])
+def api_change_password():
+    data      = request.get_json(force=True, silent=True) or {}
+    current   = data.get("current", "")
+    new_pw    = data.get("new", "")
+    confirm   = data.get("confirm", "")
+
+    if len(new_pw) < 8:
+        return jsonify({"ok": False, "error": "Mínimo 8 caracteres"}), 400
+    if new_pw != confirm:
+        return jsonify({"ok": False, "error": "Las contraseñas no coinciden"}), 400
+
+    with _db_conn() as conn:
+        row = conn.execute("SELECT value FROM kv WHERE key='password_hash'").fetchone()
+    if not row or not check_password_hash(row["value"], current):
+        return jsonify({"ok": False, "error": "Contraseña actual incorrecta"}), 403
+
+    h = generate_password_hash(new_pw)
+    with _db_lock:
+        with _db_conn() as conn:
+            conn.execute("INSERT OR REPLACE INTO kv VALUES ('password_hash', ?)", (h,))
+    log("[auth] Contraseña cambiada")
+    return jsonify({"ok": True})
+
+
+@app.route("/logout", methods=["POST"])
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
+
+
 # ─── Arranque ─────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
@@ -1968,5 +2223,7 @@ if __name__ == "__main__":
     load_from_db()
     if state["credentials"].get("private_key"):
         init_client()
+    app.secret_key = _get_or_create_secret_key()
+    app.permanent_session_lifetime = timedelta(hours=12)
     print("Abriendo en http://localhost:5000")
-    app.run(host="127.0.0.1", port=5000, debug=False, use_reloader=False)
+    app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False, threaded=True)
