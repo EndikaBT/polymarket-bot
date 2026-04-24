@@ -90,45 +90,44 @@
     .top-bar {
       background: #0f172a;
       border-bottom: 1px solid var(--card-border);
-      padding: 8px 20px;
+      padding: 0 16px;
       display: flex;
-      align-items: center;
-      gap: 10px;
+      align-items: stretch;
+      gap: 0;
       position: sticky;
       top: 0;
       z-index: 100;
+      min-height: 46px;
     }
     .top-bar-title {
       font-weight: 600;
       color: #e5e7eb;
-      font-size: .95rem;
+      font-size: .9rem;
+      padding: 0 16px 0 4px;
+      display: flex;
+      align-items: center;
+      border-right: 1px solid var(--card-border);
+      margin-right: 4px;
+      white-space: nowrap;
     }
+    .hstat {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      padding: 0 12px;
+      border-right: 1px solid var(--card-border);
+      line-height: 1.15;
+      cursor: default;
+    }
+    .hstat .hl { font-size: .63rem; color: #6b7280; text-transform: uppercase; letter-spacing: .4px; }
+    .hstat .hv { font-size: .82rem; font-weight: 700; color: #e5e7eb; }
+    .hv.positive { color: var(--green); }
+    .hv.negative { color: var(--red); }
 
     /* ── Sections ── */
     .page-section { display: none; }
     .page-section.active { display: block; }
 
-    /* ── Stats cards (dashboard) ── */
-    .stat-card {
-      background: var(--card);
-      border: 1px solid var(--card-border);
-      border-radius: 10px;
-      padding: 14px 16px;
-    }
-    .stat-card .stat-label {
-      font-size: .7rem;
-      color: #6b7280;
-      text-transform: uppercase;
-      letter-spacing: .5px;
-      margin-bottom: 4px;
-    }
-    .stat-card .stat-value {
-      font-size: 1.15rem;
-      font-weight: 700;
-      color: #e5e7eb;
-    }
-    .stat-value.positive { color: var(--green); }
-    .stat-value.negative { color: var(--red); }
 
     /* ── Cards ── */
     .card {
@@ -331,8 +330,38 @@
   <!-- Top bar -->
   <div class="top-bar">
     <span class="top-bar-title" id="topBarTitle">Dashboard</span>
-    <div class="ms-auto d-flex align-items-center gap-2">
-      <span id="lastUpdateLabel" class="text-secondary" style="font-size:.75rem"></span>
+
+    <div class="hstat" id="pill-total" title="Balance USDC + valor actual de posiciones abiertas">
+      <span class="hl">Portfolio</span>
+      <span class="hv" id="statTotal">—</span>
+    </div>
+    <div class="hstat" title="USDC disponible en tu wallet">
+      <span class="hl">Balance</span>
+      <span class="hv" id="statBalance">—</span>
+    </div>
+    <div class="hstat" id="pill-injuego" title="Dinero invertido en apuestas abiertas">
+      <span class="hl">En juego</span>
+      <span class="hv" id="statInJuego">—</span>
+    </div>
+    <div class="hstat" id="pill-daily" title="P&amp;L realizado hoy">
+      <span class="hl">Hoy</span>
+      <span class="hv" id="statDaily">—</span>
+    </div>
+    <div class="hstat" id="pill-weekly" title="P&amp;L realizado esta semana">
+      <span class="hl">Semana</span>
+      <span class="hv" id="statWeekly">—</span>
+    </div>
+    <div class="hstat" id="pill-monthly" title="P&amp;L realizado este mes">
+      <span class="hl">Mes</span>
+      <span class="hv" id="statMonthly">—</span>
+    </div>
+    <div class="hstat" id="pill-alltime" title="P&amp;L realizado total">
+      <span class="hl">Total</span>
+      <span class="hv" id="statAllTime">—</span>
+    </div>
+
+    <div class="ms-auto d-flex align-items-center gap-2 ps-3">
+      <span id="lastUpdateLabel" class="text-secondary" style="font-size:.72rem"></span>
       <button class="btn btn-sm btn-outline-secondary" id="refreshBtn" title="Actualizar posiciones">
         <i class="bi bi-arrow-clockwise"></i>
       </button>
@@ -341,52 +370,6 @@
 
   <!-- ── SECCIÓN: Dashboard ──────────────────────────────────────────────── -->
   <div id="section-dashboard" class="page-section active p-3">
-
-    <!-- Stats row -->
-    <div class="row g-2 mb-3">
-      <div class="col-6 col-md-3 col-xl">
-        <div class="stat-card" id="pill-total" title="Balance USDC + valor actual de posiciones abiertas">
-          <div class="stat-label">Portfolio</div>
-          <div class="stat-value" id="statTotal">—</div>
-        </div>
-      </div>
-      <div class="col-6 col-md-3 col-xl">
-        <div class="stat-card" title="USDC disponible en tu wallet">
-          <div class="stat-label">Balance</div>
-          <div class="stat-value" id="statBalance">—</div>
-        </div>
-      </div>
-      <div class="col-6 col-md-3 col-xl">
-        <div class="stat-card" id="pill-injuego" title="Dinero invertido en apuestas abiertas aún sin resolver">
-          <div class="stat-label">En juego</div>
-          <div class="stat-value" id="statInJuego">—</div>
-        </div>
-      </div>
-      <div class="col-6 col-md-3 col-xl">
-        <div class="stat-card" id="pill-daily" title="P&amp;L realizado hoy — solo posiciones ya cerradas">
-          <div class="stat-label">Hoy</div>
-          <div class="stat-value" id="statDaily">—</div>
-        </div>
-      </div>
-      <div class="col-6 col-md-3 col-xl">
-        <div class="stat-card" id="pill-weekly" title="P&amp;L realizado esta semana">
-          <div class="stat-label">Semana</div>
-          <div class="stat-value" id="statWeekly">—</div>
-        </div>
-      </div>
-      <div class="col-6 col-md-3 col-xl">
-        <div class="stat-card" id="pill-monthly" title="P&amp;L realizado este mes">
-          <div class="stat-label">Mes</div>
-          <div class="stat-value" id="statMonthly">—</div>
-        </div>
-      </div>
-      <div class="col-6 col-md-3 col-xl">
-        <div class="stat-card" id="pill-alltime" title="P&amp;L realizado total">
-          <div class="stat-label">Total</div>
-          <div class="stat-value" id="statAllTime">—</div>
-        </div>
-      </div>
-    </div>
 
     <!-- Bot controls -->
     <div class="card mb-3">
@@ -1674,7 +1657,7 @@ function applyPnl(elId, pillId, data) {
   const el  = document.getElementById(elId);
   const pnl = data.profit ?? 0;
   el.textContent = fmtPnl(pnl);
-  el.className = 'stat-value ' + (pnl > 0 ? 'positive' : pnl < 0 ? 'negative' : '');
+  el.className = 'hv ' + (pnl > 0 ? 'positive' : pnl < 0 ? 'negative' : '');
   const pill = document.getElementById(pillId);
   if (pill) pill.title = `✅ ${data.won ?? 0}  ❌ ${data.lost ?? 0}`;
 }
