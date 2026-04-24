@@ -2,7 +2,6 @@ import hmac
 import json
 import math
 import os
-import random
 import re
 import secrets
 import sqlite3
@@ -150,7 +149,10 @@ state = {
     "last_update": None,
     "sold_tokens": set(),
     "redeemed_tokens": set(),
-    "avg_price_cache": {},  # token_id -> float: first reliable avgPrice seen, never overwritten with suspicious values
+    "avg_price_cache":     {},  # token_id -> float: best known avgPrice, updated by Data API / fill seeder
+    "avg_price_overrides": {},  # token_id -> float: manually set by user — takes priority over everything
+    "fill_seeded":         set(),  # token_ids whose avg_price was confirmed from real fill history
+    "known_positions":     set(),  # token_ids seen at least once — used to detect new arrivals
     "hidden_tokens": set(),
     "hidden_positions": {},  # token_id -> {title, outcome, size, avg_price, cost, reason}
     "_hidden_check_ts": {},  # token_id -> float: last time recovery was checked
@@ -169,6 +171,7 @@ state = {
         "mode": "fixed",
         "fixed_amount": 1.0,
         "daily_budget": 20.0,
+        "min_price_filter": 0.0,   # skip buys where current price < this (0 = off)
     },
     "copy_running": False,
     "copy_thread": None,
@@ -283,6 +286,8 @@ def _save_settings():
                          (json.dumps(settings_to_save),))
             conn.execute("INSERT OR REPLACE INTO kv VALUES ('copy_profiles', ?)",
                          (json.dumps(list(state["copy_profiles"].values())),))
+            conn.execute("INSERT OR REPLACE INTO kv VALUES ('avg_price_overrides', ?)",
+                         (json.dumps(state["avg_price_overrides"]),))
 
 
 # Backward-compatible alias — ~15 call sites use save_config() unchanged
@@ -475,6 +480,7 @@ def load_from_db():
 
             state["credentials"].update(kv_get("credentials", {}))
             state["profit_targets"] = kv_get("profit_targets", {})
+            state["avg_price_overrides"] = kv_get("avg_price_overrides", {})
             cs = kv_get("copy_settings", {})
             state["copy_settings"].update(cs)
             for p in kv_get("copy_profiles", []):
@@ -554,20 +560,30 @@ def fetch_positions() -> list:
     address = state["credentials"].get("address", "").strip()
     if not address:
         return []
+    all_positions: list = []
+    offset = 0
+    limit  = 100
     try:
-        resp = requests.get(
-            f"{DATA_HOST}/positions",
-            params={"user": address.lower()},
-            timeout=10,
-        )
-        if resp.status_code != 200:
-            log(f"Error al obtener posiciones: HTTP {resp.status_code}")
-            return []
-        data = resp.json()
-        return data if isinstance(data, list) else data.get("positions", [])
+        while True:
+            resp = requests.get(
+                f"{DATA_HOST}/positions",
+                params={"user": address.lower(), "limit": limit, "offset": offset},
+                timeout=10,
+            )
+            if resp.status_code != 200:
+                log(f"Error al obtener posiciones: HTTP {resp.status_code}")
+                break
+            data = resp.json()
+            page = data if isinstance(data, list) else data.get("positions", [])
+            if not page:
+                break
+            all_positions.extend(page)
+            if len(page) < limit:
+                break          # last page
+            offset += limit
     except Exception as e:
         log(f"Error al obtener posiciones: {e}")
-        return []
+    return all_positions
 
 
 def get_best_bid(token_id: str) -> float:
@@ -615,12 +631,54 @@ def enrich_positions(raw_positions: list) -> list:
         if token_id in state["redeemed_tokens"]:
             continue
 
-        # avgPrice cache
-        cache = state["avg_price_cache"]
-        if avg_price_api >= 0.01 and avg_price_api > cache.get(token_id, 0.0):
-            cache[token_id] = avg_price_api
-        avg_price          = cache.get(token_id, avg_price_api)
-        avg_price_reliable = avg_price >= 0.01
+        # avgPrice resolution — priority order:
+        # 0. Manual user override (avg_price_overrides) — always wins, never overwritten.
+        # 1. fill_seeded: position has a confirmed fill price from trade history —
+        #    protect it; the Data API may only update it upward (never down).
+        # 2. Within 90 s of a copy buy the Data API may report a corrupt low value
+        #    due to its ~60 s sync delay.  During that window prefer the cache.
+        # 3. Otherwise the Data API is authoritative for positions we have no better
+        #    source for — accept its value.
+        #
+        # For any position appearing for the first time, kick off a background seed
+        # so that rule 1 applies on the next poll.
+        override = state["avg_price_overrides"].get(token_id)
+        if override and override >= 0.001:
+            # User-set value — skip API/cache update entirely
+            avg_price          = override
+            avg_price_reliable = True
+        else:
+            cache        = state["avg_price_cache"]
+            fill_seeded  = token_id in state["fill_seeded"]
+            copy_entry   = state["copy_positions"].get(token_id)
+            bought_at    = copy_entry.get("bought_at", 0) if copy_entry else 0
+            in_copy_win  = bought_at and (now - bought_at) < 90
+
+            # Trigger fill-price seeding the first time we see this position,
+            # as long as it hasn't been seeded yet and has no manual override.
+            if token_id not in state["known_positions"]:
+                state["known_positions"].add(token_id)
+                if not fill_seeded:
+                    # Use a look-back of 7 days for manually opened positions;
+                    # copy positions use their recorded bought_at timestamp.
+                    seed_ts = bought_at if bought_at else now - 7 * 86400
+                    threading.Thread(
+                        target=_seed_avg_price_from_fill,
+                        args=(token_id, 0, seed_ts),
+                        daemon=True,
+                    ).start()
+
+            if fill_seeded or in_copy_win:
+                # Confirmed fill price — only allow upward corrections from API
+                if avg_price_api >= 0.01 and avg_price_api > cache.get(token_id, 0.0):
+                    cache[token_id] = avg_price_api
+            else:
+                # No confirmed fill yet — accept Data API value as best available
+                if avg_price_api >= 0.01:
+                    cache[token_id] = avg_price_api
+
+            avg_price          = cache.get(token_id, avg_price_api)
+            avg_price_reliable = avg_price >= 0.01
 
         title = (
             raw.get("title") or raw.get("question") or
@@ -655,7 +713,10 @@ def enrich_positions(raw_positions: list) -> list:
             entry["hidden_meta"] = meta
             fetch_ids.append(token_id)
         else:
-            fetch_ids.append(token_id)
+            # Skip CLOB price fetch for positions already reported as 0 by the
+            # Data API — they are settled losses; treat price as 0 directly.
+            if cur_price_api > 0:
+                fetch_ids.append(token_id)
 
         parsed.append(entry)
 
@@ -763,6 +824,7 @@ def enrich_positions(raw_positions: list) -> list:
             "condition_id":       entry["condition_id"],
             "outcome_index":      entry["outcome_index"],
             "auto_sell_active":   target is not None and not already_sold and avg_price_reliable,
+            "avg_price_override": token_id in state["avg_price_overrides"],
             "sold":               already_sold,
             "opened_at":          opened_at,
         })
@@ -771,9 +833,10 @@ def enrich_positions(raw_positions: list) -> list:
 
 # ─── Venta propia ─────────────────────────────────────────────────────────────
 
-def fetch_fill_price(token_id: str, min_ts: float, retries: int = 3) -> float:
-    """Query the Data API for the actual fill price of the most recent SELL trade
-    on token_id placed after min_ts (unix timestamp).  Returns 0.0 if not found."""
+def fetch_fill_price(token_id: str, min_ts: float, retries: int = 3, side: str = "SELL") -> float:
+    """Query the Data API for the actual fill price of the most recent trade of the given
+    side (BUY or SELL) on token_id placed after min_ts (unix timestamp).
+    Returns 0.0 if not found."""
     address = state["credentials"].get("address", "").strip()
     if not address:
         return 0.0
@@ -794,7 +857,7 @@ def fetch_fill_price(token_id: str, min_ts: float, retries: int = 3) -> float:
                 t_token = t.get("asset") or t.get("tokenId") or t.get("token_id") or ""
                 if t_token != token_id:
                     continue
-                if (t.get("side") or "").upper() != "SELL":
+                if (t.get("side") or "").upper() != side.upper():
                     continue
                 # Parse timestamp — API returns ISO string or unix int/float
                 ts_raw = t.get("timestamp") or t.get("createdAt") or t.get("ts") or ""
@@ -809,29 +872,61 @@ def fetch_fill_price(token_id: str, min_ts: float, retries: int = 3) -> float:
                     continue
                 price = float(t.get("price") or 0)
                 if price > 0:
-                    log(f"[fill] Precio de ejecución real: {price:.4f} (vs estimado)")
+                    log(f"[fill] Precio de ejecución real ({side}): {price:.4f} (vs estimado)")
                     return price
         except Exception:
             pass
     return 0.0
 
 
-def sell_position(token_id: str, size: float, price: float | None = None) -> tuple[bool, str]:
-    """Sell shares via market order. Returns (success, message)."""
+SELL_PRICE_FLOOR_PCT = 0.05  # FOK rejects if book can't fill at ≥ 95% of reference price
+
+def sell_position(token_id: str, size: float, price: float | None = None,
+                  floor_override: float | None = None) -> tuple[bool, str]:
+    """Sell shares via market order (FOK).
+
+    `price` is used as a reference price floor: the order will only fill if the
+    average execution price is ≥ price * (1 - SELL_PRICE_FLOOR_PCT).  This prevents
+    catastrophic fills in illiquid markets where the CLOB would otherwise walk the
+    entire order book at near-zero prices.
+
+    Pass `floor_override` (≥ 0) to set an exact floor directly instead of computing
+    it from `price`.  Pass 0 to disable the floor entirely (any-price sell).
+    """
     client = state.get("client")
     if not client:
         return False, "Cliente CLOB no inicializado"
     try:
         from py_clob_client.clob_types import MarketOrderArgs, OrderType
 
+        # Determine floor: caller-supplied override takes precedence
+        if floor_override is not None:
+            floor = round(float(floor_override), 4)
+        elif price and price > 0:
+            floor = round(price * (1 - SELL_PRICE_FLOOR_PCT), 4)
+        else:
+            floor = 0
+
         order_args = MarketOrderArgs(
             token_id=token_id,
             amount=float(size),
             side="SELL",
+            price=floor,
         )
         signed = client.create_market_order(order_args)
         resp   = client.post_order(signed, OrderType.FOK)
-        log(f"SELL ejecutado — token: {token_id[:20]}… size: {size} → {resp}")
+
+        # Normalise response to a dict so we can inspect the status
+        resp_dict = resp if isinstance(resp, dict) else (resp.__dict__ if hasattr(resp, "__dict__") else {})
+        status    = str(resp_dict.get("status", "")).lower()
+
+        # Only treat as failure when the exchange explicitly reports a cancellation
+        if status in ("cancelled", "canceled", "unmatched"):
+            msg = f"Orden FOK cancelada — sin liquidez o precio mínimo no alcanzado (estado: {status})"
+            log(f"[sell] {msg} — token: {token_id[:20]}…")
+            return False, msg
+
+        log(f"SELL ejecutado — token: {token_id[:20]}… size: {size} floor={floor} → {resp}")
         state["sold_tokens"].add(token_id)
         return True, str(resp)
     except Exception as e:
@@ -951,6 +1046,7 @@ def check_and_redeem():
                 record_close(pos["title"], pos.get("outcome", ""),
                              size, avg_p, 1.0, "canjeada", token_id)
                 credit_budget(size, 1.0)  # canjeada = recibe 1 USDC por token
+                _delete_copy_position(token_id)  # clean up if it was a copy position
                 log(f"[redeem] ✓ Registrado en historial: {pos['title'][:45]}")
         finally:
             state["_redeeming"] = False
@@ -991,6 +1087,7 @@ def bot_loop():
                         credit_budget(pos["size"], fill)
                         record_close(pos["title"], pos["outcome"], pos["size"],
                                      pos["avg_price"], fill, "vendida", token_id)
+                        _delete_copy_position(token_id)
                     else:
                         log(f"Error al vender posición resuelta: {msg}")
                     continue
@@ -1001,11 +1098,6 @@ def bot_loop():
                     if age < 60:
                         continue
 
-                if token_id not in state["profit_targets"]:
-                    auto_target = random.randint(25, 30)
-                    state["profit_targets"][token_id] = auto_target
-                    save_config()
-                    log(f"[bot] Objetivo asignado: {pos['title'][:40]} → {auto_target}%")
                 target = pos.get("target_pct")
                 if target is not None and pos["pnl_pct"] is not None and pos["pnl_pct"] >= target:
                     log(
@@ -1020,6 +1112,7 @@ def bot_loop():
                         avg = pos["avg_price"] or state["avg_price_cache"].get(pos["token_id"], 0)
                         record_close(pos["title"], pos["outcome"], pos["size"],
                                      avg, fill, "vendida", pos["token_id"])
+                        _delete_copy_position(pos["token_id"])
                     else:
                         log(f"Error al vender automáticamente: {msg}")
         except Exception as e:
@@ -1191,6 +1284,7 @@ def purge_settled_losses(active_token_ids: set):
     settled = [tid for tid in list(state["hidden_tokens"]) if tid not in active_token_ids]
     for tid in settled:
         _delete_hidden(tid)
+        _delete_copy_position(tid)  # clean up if it was a copy position
     if settled:
         log(f"[bot] {len(settled)} apuesta(s) perdida(s) liquidada(s) por Polymarket (ya contabilizadas)")
 
@@ -1248,6 +1342,29 @@ def execute_copy_trade(token_id: str, amount_usdc: float) -> tuple[bool, str]:
         return True, str(resp)
     except Exception as e:
         return False, str(e)
+
+
+def _seed_avg_price_from_fill(token_id: str, amount_usdc: float, buy_ts: float) -> None:
+    """Fetch the actual fill price right after a BUY and seed avg_price_cache.
+
+    This runs in a background thread so it doesn't block the copy loop.
+    It's the authoritative source for avg_price — it fires before the Data API
+    poll can cache a corrupt sync value (which can persist for ~60 s).
+
+    On success the token_id is added to state["fill_seeded"] so enrich_positions
+    knows not to let the Data API overwrite the confirmed fill price.
+    """
+    try:
+        fill = fetch_fill_price(token_id, buy_ts, retries=5, side="BUY")
+        if fill and fill > 0:
+            state["avg_price_cache"][token_id] = fill   # authoritative fill price — always overwrite
+            state["fill_seeded"].add(token_id)
+            log(f"[avg_price] Seeded from fill (BUY): {token_id[:20]}… → {fill:.4f}")
+        else:
+            log(f"[avg_price] No fill price available for {token_id[:20]}…, "
+                "Data API value will be used when it stabilises")
+    except Exception as e:
+        log(f"[avg_price] Error seeding from fill for {token_id[:20]}…: {e}")
 
 
 # ─── Copy Trading — Procesamiento de actividad ───────────────────────────────
@@ -1370,6 +1487,17 @@ def process_copy_activity(profile: dict, activity: list):
             record["reason"] = skip_reason
             log(f"[copy] SKIP @{profile['username']} | {title[:35]} ${their_usdc:.2f} → {skip_reason}")
         else:
+            min_price = float(state["copy_settings"].get("min_price_filter") or 0)
+            if min_price > 0:
+                current_bid = get_best_bid(token_id)
+                if current_bid > 0 and current_bid < min_price:
+                    record["status"] = "skipped"
+                    record["reason"] = f"precio {current_bid:.2f} < mínimo {min_price:.2f}"
+                    log(f"[copy] SKIP (precio bajo) @{profile['username']} | {title[:35]} — {current_bid:.2f} < {min_price:.2f}")
+                    _insert_copy_trade(record)
+                    continue
+
+            buy_ts = time.time()
             success, msg = execute_copy_trade(token_id, our_amount)
             if success:
                 _add_spent(our_amount)
@@ -1377,8 +1505,15 @@ def process_copy_activity(profile: dict, activity: list):
                     "size":      our_amount,
                     "market":    title[:60],
                     "profile":   profile["username"],
-                    "bought_at": time.time(),
+                    "bought_at": buy_ts,
                 })
+                # Seed avg_price_cache from the actual fill before the Data API
+                # can poison the cache with its ~60 s sync delay value
+                threading.Thread(
+                    target=_seed_avg_price_from_fill,
+                    args=(token_id, our_amount, buy_ts),
+                    daemon=True,
+                ).start()
                 record["status"] = "executed"
                 log(f"[copy] BUY @{profile['username']} | {title[:35]} ${our_amount:.2f} ✓")
             else:
@@ -1488,6 +1623,61 @@ def api_positions():
     state["positions"]   = enriched
     state["last_update"] = datetime.now().isoformat()
     return jsonify({"positions": enriched, "last_update": state["last_update"]})
+
+
+@app.route("/api/positions/raw", methods=["GET"])
+def api_positions_raw():
+    """Return raw position data from the Data API for debugging avgPrice issues.
+
+    Optional query param ?q=<substring> filters by title/token_id (case-insensitive).
+    """
+    raw   = fetch_positions()
+    q     = (request.args.get("q") or "").lower()
+    cache = state["avg_price_cache"]
+    out   = []
+    for r in raw:
+        token_id = (r.get("asset") or r.get("tokenId") or r.get("token_id") or "")
+        title    = (r.get("title") or r.get("question") or r.get("slug") or "")
+        if q and q not in title.lower() and q not in token_id.lower():
+            continue
+        out.append({
+            "token_id":      token_id,
+            "title":         title,
+            "outcome":       r.get("outcome") or r.get("side") or "",
+            "size":          float(r.get("size") or 0),
+            "avgPrice_api":  float(r.get("avgPrice") or r.get("averagePrice") or 0),
+            "curPrice_api":  float(r.get("curPrice") or 0),
+            "cached_avg":    cache.get(token_id),
+            "redeemable":    bool(r.get("redeemable", False)),
+        })
+    return jsonify(out)
+
+
+@app.route("/api/avg-price", methods=["POST"])
+def api_set_avg_price():
+    """Manually override the avg purchase price for a position.
+
+    Body: { token_id, avg_price }   (avg_price=null or 0 clears the override)
+    """
+    data      = request.get_json(force=True)
+    token_id  = data.get("token_id")
+    avg_raw   = data.get("avg_price")
+    if not token_id:
+        return jsonify({"ok": False, "error": "token_id requerido"})
+
+    overrides = state["avg_price_overrides"]
+    if avg_raw is None or avg_raw == "" or float(avg_raw or 0) <= 0:
+        overrides.pop(token_id, None)
+        log(f"[avg_price] Override eliminado para {token_id[:20]}…")
+    else:
+        val = round(float(avg_raw), 6)
+        overrides[token_id] = val
+        # Also seed cache so existing callers get the right value immediately
+        state["avg_price_cache"][token_id] = val
+        log(f"[avg_price] Override manual: {token_id[:20]}… → {val:.4f}")
+
+    save_config()
+    return jsonify({"ok": True})
 
 
 @app.route("/api/target", methods=["POST"])
@@ -1714,15 +1904,23 @@ def api_sell():
     size     = data.get("size")
     price    = data.get("price")
     force    = bool(data.get("force", False))   # bypass slippage check
+    # floor: explicit per-share floor price set by user (overrides the auto-computed one)
+    floor_raw = data.get("floor")
+    floor_override = float(floor_raw) if floor_raw is not None else None
     if not token_id or not size:
         return jsonify({"ok": False, "error": "token_id y size requeridos"})
     size_f  = float(size)
     price_f = float(price) if price else 0.0
 
-    # ── Slippage pre-check (skip when force=True) ─────────────────────────
-    if price_f > 0 and not force:
-        fresh = get_best_bid(token_id)
-        if fresh > 0 and fresh < price_f * (1 - SLIPPAGE_WARN):
+    # ── Slippage pre-check + get fresh reference price ───────────────────────
+    # Always fetch the live price (even when force=True) so we pass it as the
+    # price floor to sell_position — this is what protects against illiquid fills.
+    # Skip slippage check when an explicit floor override is set (user already
+    # knows what floor they want).
+    fresh = get_best_bid(token_id) if price_f > 0 else 0.0
+
+    if price_f > 0 and not force and floor_override is None and fresh > 0:
+        if fresh < price_f * (1 - SLIPPAGE_WARN):
             drop_pct = round((price_f - fresh) / price_f * 100, 1)
             log(f"[sell] Slippage detectado en '{token_id[:20]}': "
                 f"UI={price_f:.4f} actual={fresh:.4f} (−{drop_pct}%)")
@@ -1734,9 +1932,14 @@ def api_sell():
                 "diff_pct":    drop_pct,
             })
 
+    # Use the fresh price as the reference floor (more current than UI price).
+    # Falls back to price_f if the API call failed.
+    ref_price = fresh if fresh > 0 else price_f
+
     pos     = next((p for p in state["positions"] if p["token_id"] == token_id), {})
     sell_ts = time.time()
-    ok, msg = sell_position(token_id, size_f, price_f if price_f > 0 else None)
+    ok, msg = sell_position(token_id, size_f, ref_price if ref_price > 0 else None,
+                            floor_override=floor_override)
     if ok:
         # Fetch actual fill price from Data API; fall back to UI price if unavailable
         fill = fetch_fill_price(token_id, sell_ts) or price_f
@@ -1748,21 +1951,28 @@ def api_sell():
 
 
 def _fetch_usdc_balance() -> float:
+    """Return the on-chain USDC.e balance of the configured wallet address."""
     try:
         from web3 import Web3
         from web3.middleware import ExtraDataToPOAMiddleware
-        from eth_account import Account
-        pk = state["credentials"].get("private_key", "")
+        pk      = state["credentials"].get("private_key", "")
+        address = state["credentials"].get("address", "")
         if not pk:
             return 0.0
         w3 = Web3(Web3.HTTPProvider("https://polygon-bor-rpc.publicnode.com"))
         w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
-        acct = Account.from_key(pk)
+        # Use the configured address (main wallet). Fall back to key-derived address
+        # only if no address is set (they are the same in EOA/signature_type=0 mode).
+        if not address:
+            from eth_account import Account
+            address = Account.from_key(pk).address
+        addr = Web3.to_checksum_address(address)
         USDC = Web3.to_checksum_address("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174")
         abi  = [{"inputs":[{"name":"account","type":"address"}],"name":"balanceOf",
                  "outputs":[{"name":"","type":"uint256"}],"type":"function","stateMutability":"view"}]
-        return w3.eth.contract(address=USDC, abi=abi).functions.balanceOf(acct.address).call() / 1_000_000
-    except Exception:
+        return w3.eth.contract(address=USDC, abi=abi).functions.balanceOf(addr).call() / 1_000_000
+    except Exception as e:
+        log(f"[balance] Error consultando USDC on-chain: {e}")
         return 0.0
 
 
@@ -1796,15 +2006,15 @@ def api_session():
 @app.route("/api/stats", methods=["GET"])
 def api_stats():
     balance = _fetch_usdc_balance()
-    # Sum current market value of all open positions
-    open_value = sum(
-        p.get("value", 0) or 0
-        for p in state.get("positions", [])
-        if not p.get("sold")
-    )
+    open_positions = [p for p in state.get("positions", []) if not p.get("sold")]
+    # Current market value of open positions
+    open_value = sum(p.get("value", 0) or 0 for p in open_positions)
+    # Money committed to open positions (what was actually paid)
+    open_cost  = sum(p.get("cost",  0) or 0 for p in open_positions)
     return jsonify({
         "balance":    round(balance, 2),
         "open_value": round(open_value, 2),
+        "open_cost":  round(open_cost, 2),
         "total":      round(balance + open_value, 2),
         "daily":      _pnl_for_period("date(ts) = date('now')"),
         "weekly":     _pnl_for_period("ts >= date('now', '-6 days')"),
@@ -1906,11 +2116,12 @@ def api_copy_get_settings():
     remaining = get_remaining_budget()
     return jsonify(
         {
-            "mode":         s.get("mode", "fixed"),
-            "fixed_amount": s.get("fixed_amount", 1.0),
-            "daily_budget": s.get("daily_budget", 20.0),
-            "spent_today":  round(spent, 2),
-            "remaining":    round(remaining, 2),
+            "mode":                   s.get("mode", "fixed"),
+            "fixed_amount":           s.get("fixed_amount", 1.0),
+            "daily_budget":           s.get("daily_budget", 20.0),
+            "min_price_filter":       s.get("min_price_filter", 0.0),
+            "spent_today":            round(spent, 2),
+            "remaining":              round(remaining, 2),
         }
     )
 
@@ -1934,7 +2145,11 @@ def api_copy_update_settings():
         if v < 1:
             return jsonify({"ok": False, "error": "daily_budget mínimo $1"}), 400
         s["daily_budget"] = v
-
+    if "min_price_filter" in data:
+        v = float(data["min_price_filter"])
+        if v < 0 or v >= 1:
+            return jsonify({"ok": False, "error": "min_price_filter debe estar entre 0 y 1"}), 400
+        s["min_price_filter"] = v
     save_config()
     return jsonify({"ok": True, "remaining": round(get_remaining_budget(), 2)})
 
@@ -1958,7 +2173,7 @@ def api_copy_trades():
     """Return last 50 copy trade records from DB."""
     with _db_conn() as conn:
         rows = conn.execute(
-            "SELECT * FROM copy_trades_log ORDER BY id DESC LIMIT 50"
+            "SELECT * FROM copy_trades_log ORDER BY id ASC LIMIT 50"
         ).fetchall()
     return jsonify([dict(r) for r in rows])
 
@@ -2226,4 +2441,10 @@ if __name__ == "__main__":
     app.secret_key = _get_or_create_secret_key()
     app.permanent_session_lifetime = timedelta(hours=12)
     print("Abriendo en http://localhost:5000")
+    # Open browser automatically after the server is up
+    def _open_browser():
+        time.sleep(1.5)
+        import webbrowser
+        webbrowser.open("http://localhost:5000")
+    threading.Thread(target=_open_browser, daemon=True).start()
     app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False, threaded=True)
