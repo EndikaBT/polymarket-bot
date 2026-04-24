@@ -9,33 +9,126 @@
   <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet" />
   <style>
     :root {
-      --accent: #7c3aed;
+      --accent:       #7c3aed;
       --accent-light: #a78bfa;
-      --surface: #111827;
-      --card: #1f2937;
-      --card-border: #374151;
-      --green: #22c55e;
-      --red: #ef4444;
-      --yellow: #eab308;
+      --surface:      #111827;
+      --card:         #1f2937;
+      --card-border:  #374151;
+      --green:        #22c55e;
+      --red:          #ef4444;
+      --yellow:       #eab308;
+      --sidebar-w:    220px;
     }
 
     body {
       background: var(--surface);
       font-family: 'Segoe UI', system-ui, sans-serif;
       font-size: 0.875rem;
+      margin: 0;
     }
 
-    /* ── Navbar ── */
-    .navbar-custom {
+    /* ── Sidebar ── */
+    .sidebar {
+      position: fixed;
+      left: 0; top: 0; bottom: 0;
+      width: var(--sidebar-w);
+      background: #0f172a;
+      border-right: 1px solid var(--card-border);
+      display: flex;
+      flex-direction: column;
+      z-index: 200;
+    }
+    .sidebar-header {
+      padding: 18px 16px 14px;
+      border-bottom: 1px solid var(--card-border);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .sidebar-header .logo-icon { color: var(--accent-light); font-size: 1.3rem; }
+    .sidebar-header .logo-text { color: var(--accent-light); font-weight: 700; font-size: 1rem; letter-spacing: -0.4px; }
+    .sidebar-status { padding: 10px 16px 6px; border-bottom: 1px solid var(--card-border); }
+
+    .sidebar-nav { padding: 8px 0; flex: 1; overflow-y: auto; }
+    .sidebar-nav .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 16px;
+      color: #9ca3af;
+      text-decoration: none;
+      font-size: 0.875rem;
+      border-left: 3px solid transparent;
+      transition: background .12s, color .12s;
+      cursor: pointer;
+    }
+    .sidebar-nav .nav-item:hover { background: rgba(124,58,237,.1); color: #e5e7eb; }
+    .sidebar-nav .nav-item.active {
+      background: rgba(124,58,237,.18);
+      color: var(--accent-light);
+      border-left-color: var(--accent-light);
+      font-weight: 600;
+    }
+    .sidebar-nav .nav-item i { font-size: 1rem; width: 18px; text-align: center; flex-shrink: 0; }
+    .sidebar-nav .nav-badge {
+      margin-left: auto;
+      background: #374151;
+      color: #9ca3af;
+      font-size: .68rem;
+      padding: 1px 6px;
+      border-radius: 9999px;
+      font-weight: 600;
+    }
+    .sidebar-footer {
+      padding: 12px 16px;
+      border-top: 1px solid var(--card-border);
+    }
+
+    /* ── Main content ── */
+    .main-content { margin-left: var(--sidebar-w); min-height: 100vh; display: flex; flex-direction: column; }
+
+    .top-bar {
       background: #0f172a;
       border-bottom: 1px solid var(--card-border);
+      padding: 8px 20px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
     }
-    .navbar-brand span {
-      color: var(--accent-light);
+    .top-bar-title {
+      font-weight: 600;
+      color: #e5e7eb;
+      font-size: .95rem;
+    }
+
+    /* ── Sections ── */
+    .page-section { display: none; }
+    .page-section.active { display: block; }
+
+    /* ── Stats cards (dashboard) ── */
+    .stat-card {
+      background: var(--card);
+      border: 1px solid var(--card-border);
+      border-radius: 10px;
+      padding: 14px 16px;
+    }
+    .stat-card .stat-label {
+      font-size: .7rem;
+      color: #6b7280;
+      text-transform: uppercase;
+      letter-spacing: .5px;
+      margin-bottom: 4px;
+    }
+    .stat-card .stat-value {
+      font-size: 1.15rem;
       font-weight: 700;
-      font-size: 1.1rem;
-      letter-spacing: -0.5px;
+      color: #e5e7eb;
     }
+    .stat-value.positive { color: var(--green); }
+    .stat-value.negative { color: var(--red); }
 
     /* ── Cards ── */
     .card {
@@ -47,60 +140,46 @@
       background: transparent;
       border-bottom: 1px solid var(--card-border);
       font-weight: 600;
-      letter-spacing: 0.3px;
+      letter-spacing: .3px;
     }
 
-    /* ── Botones ── */
-    .btn-accent {
-      background: var(--accent);
-      border: none;
-      color: #fff;
-    }
-    .btn-accent:hover { background: #6d28d9; color: #fff; }
-    .btn-accent:disabled { background: #4c1d95; opacity: 0.6; }
-
-    /* ── Status badge ── */
+    /* ── Bot badge ── */
     .bot-badge {
       display: inline-flex;
       align-items: center;
       gap: 6px;
       padding: 4px 12px;
       border-radius: 9999px;
-      font-size: 0.78rem;
+      font-size: .78rem;
       font-weight: 600;
     }
-    .bot-badge.running  { background: rgba(34,197,94,.15);  color: var(--green);  }
-    .bot-badge.stopped  { background: rgba(239,68,68,.12);  color: var(--red);    }
-    .bot-badge.paused   { background: rgba(234,179,8,.15);  color: var(--yellow); }
-    .bot-badge .dot {
-      width: 7px; height: 7px;
-      border-radius: 50%;
-      background: currentColor;
-    }
+    .bot-badge.running { background: rgba(34,197,94,.15);  color: var(--green);  }
+    .bot-badge.stopped { background: rgba(239,68,68,.12);  color: var(--red);    }
+    .bot-badge.paused  { background: rgba(234,179,8,.15);  color: var(--yellow); }
+    .bot-badge .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
     .bot-badge.running .dot { animation: pulse 1.2s infinite; }
-    @keyframes pulse {
-      0%,100% { opacity: 1; }
-      50%      { opacity: 0.3; }
-    }
+    @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:.3; } }
 
-    /* ── Tabla ── */
+    /* ── Buttons ── */
+    .btn-accent { background: var(--accent); border: none; color: #fff; }
+    .btn-accent:hover { background: #6d28d9; color: #fff; }
+    .btn-accent:disabled { background: #4c1d95; opacity: .6; }
+
+    /* ── Table ── */
     .table { color: #e5e7eb; }
     .table > thead > tr > th {
       background: #111827;
       color: #9ca3af;
       font-weight: 600;
-      font-size: 0.75rem;
+      font-size: .75rem;
       text-transform: uppercase;
-      letter-spacing: 0.6px;
+      letter-spacing: .6px;
       user-select: none;
       border-color: var(--card-border);
       white-space: nowrap;
     }
     .sortable-col:hover { color: var(--accent-light) !important; background: #1a2233 !important; }
-    .table > tbody > tr > td {
-      border-color: #283040;
-      vertical-align: middle;
-    }
+    .table > tbody > tr > td { border-color: #283040; vertical-align: middle; }
     .table > tbody > tr:hover > td { background: rgba(124,58,237,.07); }
 
     .pnl-positive { color: var(--green); font-weight: 600; }
@@ -111,15 +190,15 @@
       display: inline-block;
       padding: 1px 8px;
       border-radius: 4px;
-      font-size: 0.72rem;
+      font-size: .72rem;
       font-weight: 700;
-      letter-spacing: 0.5px;
+      letter-spacing: .5px;
     }
     .outcome-yes { background: rgba(34,197,94,.18); color: var(--green); }
-    .outcome-no  { background: rgba(239,68,68,.18);  color: var(--red);   }
+    .outcome-no  { background: rgba(239,68,68,.18);  color: var(--red); }
 
     .market-title {
-      max-width: 280px;
+      max-width: 260px;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -127,35 +206,21 @@
     }
 
     /* progress hacia objetivo */
-    .progress-target {
-      height: 3px;
-      border-radius: 2px;
-      background: #374151;
-      margin-top: 3px;
-    }
-    .progress-target .bar {
-      height: 100%;
-      border-radius: 2px;
-      background: var(--accent-light);
-      transition: width .4s ease;
-    }
+    .progress-target { height: 3px; border-radius: 2px; background: #374151; margin-top: 3px; }
+    .progress-target .bar { height: 100%; border-radius: 2px; background: var(--accent-light); transition: width .4s ease; }
 
     /* ── Target input ── */
     .target-input {
-      width: 80px;
+      width: 72px;
       background: #111827;
       border: 1px solid var(--card-border);
       border-radius: 6px;
       color: #e5e7eb;
-      padding: 3px 8px;
-      font-size: 0.82rem;
+      padding: 3px 6px;
+      font-size: .82rem;
       text-align: right;
     }
-    .target-input:focus {
-      outline: none;
-      border-color: var(--accent-light);
-      box-shadow: 0 0 0 2px rgba(167,139,250,.25);
-    }
+    .target-input:focus { outline: none; border-color: var(--accent-light); box-shadow: 0 0 0 2px rgba(167,139,250,.25); }
     .target-saved { border-color: var(--green) !important; }
     .target-error { border-color: var(--red)   !important; }
 
@@ -164,10 +229,10 @@
       background: #0b1120;
       border: 1px solid var(--card-border);
       border-radius: 8px;
-      height: 180px;
+      height: 200px;
       overflow-y: auto;
       font-family: 'Consolas', 'Cascadia Code', monospace;
-      font-size: 0.75rem;
+      font-size: .75rem;
       padding: 8px 12px;
       color: #94a3b8;
     }
@@ -176,44 +241,16 @@
     #logPanel .log-err   { color: var(--red);   }
     #logPanel .log-info  { color: #60a5fa; }
 
-    /* ── Misc ── */
-    .sold-row td { opacity: 0.45; }
-    .empty-state  { color: #6b7280; text-align: center; padding: 40px 0; }
-    .spinner-mini { width: 14px; height: 14px; }
-
-    /* ── Session stats (navbar) ── */
-    .session-stat {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      line-height: 1.1;
-      padding: 2px 10px;
-      border-left: 1px solid var(--card-border);
-    }
-    .session-stat .stat-label {
-      font-size: 0.65rem;
-      color: #6b7280;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-    }
-    .session-stat .stat-value {
-      font-size: 0.85rem;
-      font-weight: 700;
-      color: #e5e7eb;
-    }
-    .stat-value.positive { color: var(--green); }
-    .stat-value.negative { color: var(--red); }
-
     /* ── Copy Trading ── */
     .copy-trade-log {
       background: #0b1120;
       border: 1px solid var(--card-border);
       border-radius: 8px;
-      height: 160px;
+      height: 200px;
       overflow-y: auto;
       padding: 8px 12px;
       font-family: 'Consolas', 'Cascadia Code', monospace;
-      font-size: 0.75rem;
+      font-size: .75rem;
     }
     .ct-executed { color: var(--green); }
     .ct-skipped  { color: var(--yellow); }
@@ -223,210 +260,342 @@
       display: flex;
       align-items: center;
       gap: 8px;
-      padding: 6px 4px;
+      padding: 7px 4px;
       border-bottom: 1px solid #283040;
     }
     .profile-row:last-child { border-bottom: none; }
+
+    /* ── Misc ── */
+    .sold-row td { opacity: .45; }
+    .empty-state  { color: #6b7280; text-align: center; padding: 40px 0; }
   </style>
 </head>
 <body>
 
-<!-- ── Navbar ─────────────────────────────────────────────────────────────── -->
-<nav class="navbar navbar-custom px-3 py-2">
-  <div class="d-flex align-items-center gap-3">
-    <span class="navbar-brand mb-0">
-      <i class="bi bi-graph-up-arrow me-1" style="color:var(--accent-light)"></i>
-      <span>Polymarket Bot</span>
-    </span>
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<!--  SIDEBAR                                                               -->
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<aside class="sidebar">
+  <div class="sidebar-header">
+    <i class="bi bi-graph-up-arrow logo-icon"></i>
+    <span class="logo-text">Polymarket Bot</span>
+  </div>
+
+  <div class="sidebar-status">
     <span id="botStatusBadge" class="bot-badge stopped">
       <span class="dot"></span> Detenido
     </span>
   </div>
-  <div class="d-flex align-items-center gap-2 ms-auto">
-    <!-- Session stats -->
-    <div class="session-stat" id="pill-total" title="Balance USDC + valor de posiciones abiertas">
-      <span class="stat-label">Portfolio</span>
-      <span class="stat-value" id="statTotal">—</span>
-    </div>
-    <div class="session-stat">
-      <span class="stat-label">Balance</span>
-      <span class="stat-value" id="statBalance">—</span>
-    </div>
-    <div class="session-stat" id="pill-daily" title="">
-      <span class="stat-label">Hoy</span>
-      <span class="stat-value" id="statDaily">—</span>
-    </div>
-    <div class="session-stat" id="pill-weekly" title="">
-      <span class="stat-label">Semana</span>
-      <span class="stat-value" id="statWeekly">—</span>
-    </div>
-    <div class="session-stat" id="pill-monthly" title="">
-      <span class="stat-label">Mes</span>
-      <span class="stat-value" id="statMonthly">—</span>
-    </div>
-    <div class="session-stat" id="pill-alltime" title="" style="border-right:1px solid var(--card-border); margin-right:4px;">
-      <span class="stat-label">Total</span>
-      <span class="stat-value" id="statAllTime">—</span>
-    </div>
-    <span id="lastUpdateLabel" class="text-secondary" style="font-size:.75rem"></span>
-    <button class="btn btn-sm btn-outline-secondary" id="refreshBtn" title="Actualizar posiciones">
-      <i class="bi bi-arrow-clockwise"></i>
-    </button>
-    <button class="btn btn-sm btn-outline-secondary" data-bs-toggle="collapse" data-bs-target="#configPanel" title="Configuración">
+
+  <nav class="sidebar-nav">
+    <a class="nav-item active" data-section="dashboard">
+      <i class="bi bi-speedometer2"></i>
+      <span>Dashboard</span>
+    </a>
+    <a class="nav-item" data-section="posiciones">
+      <i class="bi bi-wallet2"></i>
+      <span>Posiciones</span>
+      <span class="nav-badge" id="sidebarPosCount">0</span>
+    </a>
+    <a class="nav-item" data-section="copy">
+      <i class="bi bi-people-fill"></i>
+      <span>Copy Trading</span>
+      <span class="nav-badge" id="sidebarCopyBadge" style="background:rgba(239,68,68,.2);color:var(--red)">●</span>
+    </a>
+    <a class="nav-item" data-section="historial">
+      <i class="bi bi-clock-history"></i>
+      <span>Historial</span>
+      <span class="nav-badge" id="sidebarClosedCount">0</span>
+    </a>
+    <a class="nav-item" data-section="configuracion">
       <i class="bi bi-gear"></i>
-    </button>
-    <form method="POST" action="/logout" class="d-inline ms-1">
+      <span>Configuración</span>
+    </a>
+  </nav>
+
+  <div class="sidebar-footer">
+    <form method="POST" action="/logout">
       <input type="hidden" name="_csrf" value="{{ csrf_token() }}" />
-      <button type="submit" class="btn btn-sm btn-outline-secondary" title="Cerrar sesión">
-        <i class="bi bi-box-arrow-right"></i>
+      <button type="submit" class="btn btn-outline-secondary btn-sm w-100">
+        <i class="bi bi-box-arrow-right me-1"></i>Cerrar sesión
       </button>
     </form>
   </div>
-</nav>
+</aside>
 
-<!-- ── Config panel (colapsable) ─────────────────────────────────────────── -->
-<div class="collapse" id="configPanel">
-  <div class="container-fluid p-3">
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<!--  MAIN CONTENT                                                          -->
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<div class="main-content">
+
+  <!-- Top bar -->
+  <div class="top-bar">
+    <span class="top-bar-title" id="topBarTitle">Dashboard</span>
+    <div class="ms-auto d-flex align-items-center gap-2">
+      <span id="lastUpdateLabel" class="text-secondary" style="font-size:.75rem"></span>
+      <button class="btn btn-sm btn-outline-secondary" id="refreshBtn" title="Actualizar posiciones">
+        <i class="bi bi-arrow-clockwise"></i>
+      </button>
+    </div>
+  </div>
+
+  <!-- ── SECCIÓN: Dashboard ──────────────────────────────────────────────── -->
+  <div id="section-dashboard" class="page-section active p-3">
+
+    <!-- Stats row -->
+    <div class="row g-2 mb-3">
+      <div class="col-6 col-md-3 col-xl">
+        <div class="stat-card" id="pill-total" title="Balance USDC + valor actual de posiciones abiertas">
+          <div class="stat-label">Portfolio</div>
+          <div class="stat-value" id="statTotal">—</div>
+        </div>
+      </div>
+      <div class="col-6 col-md-3 col-xl">
+        <div class="stat-card" title="USDC disponible en tu wallet">
+          <div class="stat-label">Balance</div>
+          <div class="stat-value" id="statBalance">—</div>
+        </div>
+      </div>
+      <div class="col-6 col-md-3 col-xl">
+        <div class="stat-card" id="pill-injuego" title="Dinero invertido en apuestas abiertas aún sin resolver">
+          <div class="stat-label">En juego</div>
+          <div class="stat-value" id="statInJuego">—</div>
+        </div>
+      </div>
+      <div class="col-6 col-md-3 col-xl">
+        <div class="stat-card" id="pill-daily" title="P&amp;L realizado hoy — solo posiciones ya cerradas">
+          <div class="stat-label">Hoy</div>
+          <div class="stat-value" id="statDaily">—</div>
+        </div>
+      </div>
+      <div class="col-6 col-md-3 col-xl">
+        <div class="stat-card" id="pill-weekly" title="P&amp;L realizado esta semana">
+          <div class="stat-label">Semana</div>
+          <div class="stat-value" id="statWeekly">—</div>
+        </div>
+      </div>
+      <div class="col-6 col-md-3 col-xl">
+        <div class="stat-card" id="pill-monthly" title="P&amp;L realizado este mes">
+          <div class="stat-label">Mes</div>
+          <div class="stat-value" id="statMonthly">—</div>
+        </div>
+      </div>
+      <div class="col-6 col-md-3 col-xl">
+        <div class="stat-card" id="pill-alltime" title="P&amp;L realizado total">
+          <div class="stat-label">Total</div>
+          <div class="stat-value" id="statAllTime">—</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bot controls -->
+    <div class="card mb-3">
+      <div class="card-header d-flex align-items-center gap-2">
+        <i class="bi bi-robot text-secondary"></i> Bot de ventas
+      </div>
+      <div class="card-body d-flex align-items-center gap-3">
+        <button id="startBotBtn" class="btn btn-sm btn-accent">
+          <i class="bi bi-play-fill"></i> Iniciar bot
+        </button>
+        <button id="stopBotBtn" class="btn btn-sm btn-outline-danger" disabled>
+          <i class="bi bi-stop-fill"></i> Detener
+        </button>
+        <span class="text-secondary ms-2" style="font-size:.75rem">
+          Revisa posiciones cada 1 s y vende automáticamente al alcanzar el objetivo.
+        </span>
+      </div>
+    </div>
+
+    <!-- Log panel -->
+    <div class="card">
+      <div class="card-header d-flex align-items-center justify-content-between">
+        <span><i class="bi bi-terminal text-secondary me-1"></i>Registro de actividad</span>
+        <button class="btn btn-sm btn-outline-secondary py-0" id="clearLogsBtn">
+          <i class="bi bi-trash"></i>
+        </button>
+      </div>
+      <div class="card-body p-2">
+        <div id="logPanel"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── SECCIÓN: Posiciones ─────────────────────────────────────────────── -->
+  <div id="section-posiciones" class="page-section p-3">
     <div class="card">
       <div class="card-header d-flex align-items-center gap-2">
-        <i class="bi bi-shield-lock text-warning"></i>
-        Credenciales — guardadas localmente en <code>config.json</code>
+        <i class="bi bi-wallet2 text-primary"></i>
+        Posiciones abiertas
+        <span id="posCount" class="badge bg-secondary ms-1">0</span>
       </div>
-      <div class="card-body">
-        <form id="configForm" class="row g-3">
-          <div class="col-md-6">
-            <label class="form-label text-secondary">Clave privada (0x…)</label>
-            <input type="password" id="inputPK" class="form-control form-control-sm bg-dark text-light border-secondary"
-              placeholder="0x..." autocomplete="off" />
-            <div class="form-text text-warning">
-              <i class="bi bi-exclamation-triangle-fill"></i>
-              Nunca compartas tu clave privada. Se guarda sin cifrar.
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-sm mb-0" id="positionsTable">
+            <thead>
+              <tr>
+                <th class="sortable-col" data-table="pos" data-key="title" style="cursor:pointer">
+                  Mercado <span class="sort-icon text-secondary">⇅</span>
+                </th>
+                <th class="sortable-col" data-table="pos" data-key="outcome" style="cursor:pointer">
+                  Resultado <span class="sort-icon text-secondary">⇅</span>
+                </th>
+                <th class="text-end sortable-col" data-table="pos" data-key="cost" style="cursor:pointer">
+                  Coste <span class="sort-icon text-secondary">⇅</span>
+                </th>
+                <th class="text-end sortable-col" data-table="pos" data-key="value" style="cursor:pointer">
+                  Valor <span class="sort-icon text-secondary">⇅</span>
+                </th>
+                <th class="text-end sortable-col" data-table="pos" data-key="net_profit" style="cursor:pointer">
+                  Beneficio <span class="sort-icon text-secondary">⇅</span>
+                </th>
+                <th class="text-end">P&amp;L %</th>
+                <th class="text-end sortable-col" data-table="pos" data-key="opened_at" style="cursor:pointer">
+                  Fecha <span class="sort-icon text-secondary">⇅</span>
+                </th>
+                <th class="text-center">Objetivo %</th>
+                <th class="text-center">Acción</th>
+              </tr>
+            </thead>
+            <tbody id="positionsBody">
+              <tr>
+                <td colspan="9" class="empty-state">
+                  <i class="bi bi-inbox fs-4 d-block mb-2"></i>
+                  Sin posiciones — configura tus credenciales y pulsa Actualizar
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── SECCIÓN: Copy Trading ──────────────────────────────────────────── -->
+  <div id="section-copy" class="page-section p-3">
+    <div class="card">
+      <div class="card-header d-flex align-items-center gap-2 flex-wrap">
+        <i class="bi bi-people-fill" style="color:var(--accent-light)"></i>
+        <span style="font-weight:700">Copy Trading</span>
+        <span id="copyBotBadge" class="bot-badge stopped">
+          <span class="dot"></span> Detenido
+        </span>
+        <div class="ms-auto d-flex gap-2 flex-wrap">
+          <button id="approveUsdcBtn" class="btn btn-sm btn-outline-warning" title="Aprobar USDC para Polymarket">
+            <i class="bi bi-shield-check"></i> Aprobar USDC
+          </button>
+          <button id="startCopyBtn" class="btn btn-sm btn-accent">
+            <i class="bi bi-play-fill"></i> Iniciar
+          </button>
+          <button id="stopCopyBtn" class="btn btn-sm btn-outline-danger" disabled>
+            <i class="bi bi-stop-fill"></i> Detener
+          </button>
+          <button class="btn btn-sm btn-outline-secondary" data-bs-toggle="collapse" data-bs-target="#copySettingsPanel" title="Configuración">
+            <i class="bi bi-sliders"></i>
+          </button>
+        </div>
+      </div>
+
+      <!-- Settings (collapsible) -->
+      <div class="collapse" id="copySettingsPanel">
+        <div class="card-body border-bottom" style="border-color:var(--card-border)!important">
+          <div class="row g-3 align-items-end">
+            <div class="col-md-3">
+              <label class="form-label text-secondary small mb-1">Modo</label>
+              <select id="copyMode" class="form-select form-select-sm bg-dark text-light border-secondary">
+                <option value="fixed" selected>Cantidad fija por trade</option>
+                <option value="proportional">Proporcional a su cartera</option>
+              </select>
             </div>
+            <div class="col-md-2" id="fixedAmountCol" style="display:none">
+              <label class="form-label text-secondary small mb-1">Cantidad fija ($)</label>
+              <input type="number" id="fixedAmount" min="1" step="0.5"
+                class="form-control form-control-sm bg-dark text-light border-secondary" value="1" />
+            </div>
+            <div class="col-md-2">
+              <label class="form-label text-secondary small mb-1">Presupuesto diario ($)</label>
+              <input type="number" id="dailyBudget" min="1" step="1"
+                class="form-control form-control-sm bg-dark text-light border-secondary" value="20" />
+            </div>
+            <div class="col-md-2">
+              <label class="form-label text-secondary small mb-1"
+                title="No copiar si el precio actual del token es menor que este valor (0 = desactivado)">
+                Precio mín. ⓘ
+              </label>
+              <div class="input-group input-group-sm">
+                <input type="number" id="minPriceFilter" min="0" max="0.99" step="0.01"
+                  class="form-control bg-dark text-light border-secondary" value="0" placeholder="0 = off" />
+                <span class="input-group-text bg-dark text-secondary border-secondary">¢</span>
+              </div>
+            </div>
+            <div class="col-md-2">
+              <button class="btn btn-sm btn-accent w-100" onclick="saveCopySettings()">
+                <i class="bi bi-floppy"></i> Guardar
+              </button>
+            </div>
+            <div class="col-md-3" id="settingsSaveMsg"></div>
           </div>
-          <div class="col-md-4">
-            <label class="form-label text-secondary">Dirección de wallet (0x…)</label>
-            <input type="text" id="inputAddress" class="form-control form-control-sm bg-dark text-light border-secondary"
-              placeholder="0x..." autocomplete="off" />
-          </div>
-          <div class="col-md-2 d-flex align-items-end">
-            <button type="submit" class="btn btn-accent btn-sm w-100">
-              <i class="bi bi-floppy"></i> Guardar
+        </div>
+      </div>
+
+      <!-- Budget bar -->
+      <div class="card-body py-2 border-bottom" style="border-color:var(--card-border)!important">
+        <div class="d-flex justify-content-between align-items-center mb-1">
+          <div class="d-flex align-items-center gap-2">
+            <span class="text-secondary small">Presupuesto hoy</span>
+            <button id="resetBudgetBtn" class="btn btn-outline-secondary py-0 px-2" style="font-size:.7rem;line-height:1.4" title="Reiniciar gastado hoy a $0">
+              <i class="bi bi-arrow-counterclockwise"></i> Reset
             </button>
           </div>
-          <div id="configMsg" class="col-12"></div>
-        </form>
+          <span class="small">
+            <span id="spentToday" class="text-light fw-bold">$0.00</span>
+            <span class="text-secondary"> gastado · </span>
+            <span id="remainingBudget" class="text-success fw-bold">$20.00</span>
+            <span class="text-secondary"> restante de </span>
+            <span id="dailyBudgetDisplay" class="text-secondary">$20.00</span>
+          </span>
+        </div>
+        <div class="progress" style="height:4px; background:#374151; border-radius:2px">
+          <div id="budgetBar" class="progress-bar" style="width:0%; background:var(--accent); border-radius:2px; transition:width .4s ease"></div>
+        </div>
+      </div>
+
+      <!-- Profiles list -->
+      <div class="card-body py-2 border-bottom" style="border-color:var(--card-border)!important">
+        <div class="d-flex align-items-center gap-2 mb-2">
+          <span class="text-secondary small fw-bold" style="letter-spacing:.5px">PERFILES SEGUIDOS</span>
+          <button class="btn btn-sm btn-outline-secondary py-0 px-2" id="addProfileBtn">
+            <i class="bi bi-plus-circle me-1"></i>Añadir perfil
+          </button>
+        </div>
+        <div id="profilesList">
+          <div class="text-secondary small text-center py-2">Ningún perfil añadido aún</div>
+        </div>
+      </div>
+
+      <!-- Copy trades log -->
+      <div class="card-body p-2">
+        <div class="d-flex align-items-center justify-content-between mb-1 px-1">
+          <span class="text-secondary small fw-bold" style="letter-spacing:.5px">TRADES COPIADOS</span>
+          <button class="btn btn-sm btn-outline-secondary py-0 px-2" id="clearCopyBtn">
+            <i class="bi bi-trash"></i>
+          </button>
+        </div>
+        <div id="copyTradesLog" class="copy-trade-log">
+          <p class="ct-neutral m-0">Sin actividad aún…</p>
+        </div>
       </div>
     </div>
+  </div>
 
-    <!-- Change password -->
-    <div class="card mt-3">
+  <!-- ── SECCIÓN: Historial ──────────────────────────────────────────────── -->
+  <div id="section-historial" class="page-section p-3">
+    <div class="card">
       <div class="card-header d-flex align-items-center gap-2">
-        <i class="bi bi-key text-accent"></i>
-        Cambiar contraseña
-      </div>
-      <div class="card-body">
-        <form id="changePwForm" class="row g-3" autocomplete="off">
-          <div class="col-md-4">
-            <label class="form-label text-secondary">Contraseña actual</label>
-            <input type="password" id="cpCurrent" class="form-control form-control-sm bg-dark text-light border-secondary" />
-          </div>
-          <div class="col-md-4">
-            <label class="form-label text-secondary">Nueva contraseña</label>
-            <input type="password" id="cpNew" class="form-control form-control-sm bg-dark text-light border-secondary" placeholder="Mínimo 8 caracteres" />
-          </div>
-          <div class="col-md-4">
-            <label class="form-label text-secondary">Confirmar nueva</label>
-            <input type="password" id="cpConfirm" class="form-control form-control-sm bg-dark text-light border-secondary" />
-          </div>
-          <div class="col-12 d-flex align-items-center gap-3">
-            <button type="submit" class="btn btn-accent btn-sm">
-              <i class="bi bi-floppy"></i> Cambiar contraseña
-            </button>
-            <span id="cpMsg" class="small"></span>
-          </div>
-        </form>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- ── Main ───────────────────────────────────────────────────────────────── -->
-<div class="container-fluid p-3">
-
-  <!-- Bot controls -->
-  <div class="d-flex align-items-center gap-2 mb-3">
-    <button id="startBotBtn" class="btn btn-sm btn-accent">
-      <i class="bi bi-play-fill"></i> Iniciar bot
-    </button>
-    <button id="stopBotBtn" class="btn btn-sm btn-outline-danger" disabled>
-      <i class="bi bi-stop-fill"></i> Detener
-    </button>
-    <span class="text-secondary ms-2" style="font-size:.75rem">
-      El bot revisa posiciones cada 1 s y vende automáticamente al alcanzar el objetivo.
-    </span>
-  </div>
-
-  <!-- Positions card -->
-  <div class="card mb-3">
-    <div class="card-header d-flex align-items-center gap-2">
-      <i class="bi bi-wallet2 text-primary"></i>
-      Posiciones abiertas
-      <span id="posCount" class="badge bg-secondary ms-1">0</span>
-    </div>
-    <div class="card-body p-0">
-      <div class="table-responsive">
-        <table class="table table-sm mb-0" id="positionsTable">
-          <thead>
-            <tr>
-              <th class="sortable-col" data-table="pos" data-key="title" style="cursor:pointer">
-                Mercado <span class="sort-icon text-secondary">⇅</span>
-              </th>
-              <th class="sortable-col" data-table="pos" data-key="outcome" style="cursor:pointer">
-                Resultado <span class="sort-icon text-secondary">⇅</span>
-              </th>
-              <th class="text-end sortable-col" data-table="pos" data-key="cost" style="cursor:pointer">
-                Coste <span class="sort-icon text-secondary">⇅</span>
-              </th>
-              <th class="text-end sortable-col" data-table="pos" data-key="value" style="cursor:pointer">
-                Valor <span class="sort-icon text-secondary">⇅</span>
-              </th>
-              <th class="text-end sortable-col" data-table="pos" data-key="net_profit" style="cursor:pointer">
-                Beneficio <span class="sort-icon text-secondary">⇅</span>
-              </th>
-              <th class="text-end">P&amp;L %</th>
-              <th class="text-end sortable-col" data-table="pos" data-key="opened_at" style="cursor:pointer">
-                Fecha <span class="sort-icon text-secondary">⇅</span>
-              </th>
-              <th class="text-center">Objetivo %</th>
-              <th class="text-center">Acción</th>
-            </tr>
-          </thead>
-          <tbody id="positionsBody">
-            <tr>
-              <td colspan="9" class="empty-state">
-                <i class="bi bi-inbox fs-4 d-block mb-2"></i>
-                Sin posiciones — configura tus credenciales y pulsa Actualizar
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-  </div>
-
-  <!-- Historial de apuestas cerradas -->
-  <div class="card mb-3">
-    <div class="card-header d-flex align-items-center justify-content-between"
-         style="cursor:pointer" data-bs-toggle="collapse" data-bs-target="#closedPanel">
-      <span>
-        <i class="bi bi-trophy text-secondary me-1"></i>
+        <i class="bi bi-clock-history text-secondary"></i>
         Historial de apuestas
         <span id="closedCount" class="badge bg-secondary ms-1">0</span>
         <span id="closedTotalProfit" class="ms-2 small"></span>
-      </span>
-      <i class="bi bi-chevron-down text-secondary"></i>
-    </div>
-    <div class="collapse" id="closedPanel">
+      </div>
       <div class="table-responsive">
         <table class="table table-sm table-borderless mb-0" id="closedTable">
           <thead>
@@ -459,126 +628,78 @@
     </div>
   </div>
 
-  <!-- Log panel -->
-  <div class="card mb-3">
-    <div class="card-header d-flex align-items-center justify-content-between">
-      <span><i class="bi bi-terminal text-secondary me-1"></i>Registro de actividad</span>
-      <button class="btn btn-sm btn-outline-secondary py-0" id="clearLogsBtn">
-        <i class="bi bi-trash"></i>
-      </button>
-    </div>
-    <div class="card-body p-2">
-      <div id="logPanel"></div>
-    </div>
-  </div>
-
-  <!-- ── Copy Trading ─────────────────────────────────────────────────────── -->
-  <div class="card">
-    <div class="card-header d-flex align-items-center gap-2 flex-wrap">
-      <i class="bi bi-people-fill" style="color:var(--accent-light)"></i>
-      <span style="font-weight:700">Copy Trading</span>
-      <span id="copyBotBadge" class="bot-badge stopped">
-        <span class="dot"></span> Detenido
-      </span>
-      <div class="ms-auto d-flex gap-2">
-        <button id="approveUsdcBtn" class="btn btn-sm btn-outline-warning" title="Aprobar USDC para Polymarket">
-          <i class="bi bi-shield-check"></i> Aprobar USDC
-        </button>
-        <button id="startCopyBtn" class="btn btn-sm btn-accent">
-          <i class="bi bi-play-fill"></i> Iniciar
-        </button>
-        <button id="stopCopyBtn" class="btn btn-sm btn-outline-danger" disabled>
-          <i class="bi bi-stop-fill"></i> Detener
-        </button>
-        <button class="btn btn-sm btn-outline-secondary" data-bs-toggle="collapse" data-bs-target="#copySettingsPanel" title="Configuración">
-          <i class="bi bi-sliders"></i>
-        </button>
+  <!-- ── SECCIÓN: Configuración ─────────────────────────────────────────── -->
+  <div id="section-configuracion" class="page-section p-3">
+    <!-- Credentials -->
+    <div class="card mb-3">
+      <div class="card-header d-flex align-items-center gap-2">
+        <i class="bi bi-shield-lock text-warning"></i>
+        Credenciales de wallet
       </div>
-    </div>
-
-    <!-- Settings (collapsible) -->
-    <div class="collapse" id="copySettingsPanel">
-      <div class="card-body border-bottom" style="border-color:var(--card-border)!important">
-        <div class="row g-3 align-items-end">
-          <div class="col-md-3">
-            <label class="form-label text-secondary small mb-1">Modo</label>
-            <select id="copyMode" class="form-select form-select-sm bg-dark text-light border-secondary">
-              <option value="fixed" selected>Cantidad fija por trade</option>
-              <option value="proportional">Proporcional a su cartera</option>
-            </select>
+      <div class="card-body">
+        <form id="configForm" class="row g-3">
+          <div class="col-md-6">
+            <label class="form-label text-secondary">Clave privada (0x…)</label>
+            <input type="password" id="inputPK" class="form-control form-control-sm bg-dark text-light border-secondary"
+              placeholder="0x..." autocomplete="off" />
+            <div class="form-text text-warning">
+              <i class="bi bi-exclamation-triangle-fill"></i>
+              Nunca compartas tu clave privada. Se guarda sin cifrar en la base de datos local.
+            </div>
           </div>
-          <div class="col-md-2" id="fixedAmountCol" style="display:none">
-            <label class="form-label text-secondary small mb-1">Cantidad fija ($)</label>
-            <input type="number" id="fixedAmount" min="1" step="0.5"
-              class="form-control form-control-sm bg-dark text-light border-secondary" value="1" />
+          <div class="col-md-4">
+            <label class="form-label text-secondary">Dirección de wallet (0x…)</label>
+            <input type="text" id="inputAddress" class="form-control form-control-sm bg-dark text-light border-secondary"
+              placeholder="0x..." autocomplete="off" />
           </div>
-          <div class="col-md-2">
-            <label class="form-label text-secondary small mb-1">Presupuesto diario ($)</label>
-            <input type="number" id="dailyBudget" min="1" step="1"
-              class="form-control form-control-sm bg-dark text-light border-secondary" value="20" />
-          </div>
-          <div class="col-md-2">
-            <button class="btn btn-sm btn-accent w-100" onclick="saveCopySettings()">
+          <div class="col-md-2 d-flex align-items-end">
+            <button type="submit" class="btn btn-accent btn-sm w-100">
               <i class="bi bi-floppy"></i> Guardar
             </button>
           </div>
-          <div class="col-md-3" id="settingsSaveMsg"></div>
-        </div>
+          <div id="configMsg" class="col-12"></div>
+        </form>
       </div>
     </div>
 
-    <!-- Budget bar -->
-    <div class="card-body py-2 border-bottom" style="border-color:var(--card-border)!important">
-      <div class="d-flex justify-content-between align-items-center mb-1">
-        <div class="d-flex align-items-center gap-2">
-          <span class="text-secondary small">Presupuesto hoy</span>
-          <button id="resetBudgetBtn" class="btn btn-outline-secondary py-0 px-2" style="font-size:.7rem;line-height:1.4" title="Reiniciar gastado hoy a $0">
-            <i class="bi bi-arrow-counterclockwise"></i> Reset
-          </button>
-        </div>
-        <span class="small">
-          <span id="spentToday" class="text-light fw-bold">$0.00</span>
-          <span class="text-secondary"> gastado · </span>
-          <span id="remainingBudget" class="text-success fw-bold">$20.00</span>
-          <span class="text-secondary"> restante de </span>
-          <span id="dailyBudgetDisplay" class="text-secondary">$20.00</span>
-        </span>
+    <!-- Change password -->
+    <div class="card">
+      <div class="card-header d-flex align-items-center gap-2">
+        <i class="bi bi-key" style="color:var(--accent-light)"></i>
+        Cambiar contraseña de acceso
       </div>
-      <div class="progress" style="height:4px; background:#374151; border-radius:2px">
-        <div id="budgetBar" class="progress-bar" style="width:0%; background:var(--accent); border-radius:2px; transition:width .4s ease"></div>
-      </div>
-    </div>
-
-    <!-- Profiles list -->
-    <div class="card-body py-2 border-bottom" style="border-color:var(--card-border)!important">
-      <div class="d-flex align-items-center gap-2 mb-2">
-        <span class="text-secondary small fw-bold" style="letter-spacing:.5px">PERFILES SEGUIDOS</span>
-        <button class="btn btn-sm btn-outline-secondary py-0 px-2" id="addProfileBtn">
-          <i class="bi bi-plus-circle me-1"></i>Añadir perfil
-        </button>
-      </div>
-      <div id="profilesList">
-        <div class="text-secondary small text-center py-2">Ningún perfil añadido aún</div>
-      </div>
-    </div>
-
-    <!-- Copy trades log -->
-    <div class="card-body p-2">
-      <div class="d-flex align-items-center justify-content-between mb-1 px-1">
-        <span class="text-secondary small fw-bold" style="letter-spacing:.5px">TRADES COPIADOS</span>
-        <button class="btn btn-sm btn-outline-secondary py-0 px-2" id="clearCopyBtn">
-          <i class="bi bi-trash"></i>
-        </button>
-      </div>
-      <div id="copyTradesLog" class="copy-trade-log">
-        <p class="ct-neutral m-0">Sin actividad aún…</p>
+      <div class="card-body">
+        <form id="changePwForm" class="row g-3" autocomplete="off">
+          <div class="col-md-4">
+            <label class="form-label text-secondary">Contraseña actual</label>
+            <input type="password" id="cpCurrent" class="form-control form-control-sm bg-dark text-light border-secondary" />
+          </div>
+          <div class="col-md-4">
+            <label class="form-label text-secondary">Nueva contraseña</label>
+            <input type="password" id="cpNew" class="form-control form-control-sm bg-dark text-light border-secondary" placeholder="Mínimo 8 caracteres" />
+          </div>
+          <div class="col-md-4">
+            <label class="form-label text-secondary">Confirmar nueva</label>
+            <input type="password" id="cpConfirm" class="form-control form-control-sm bg-dark text-light border-secondary" />
+          </div>
+          <div class="col-12 d-flex align-items-center gap-3">
+            <button type="submit" class="btn btn-accent btn-sm">
+              <i class="bi bi-floppy"></i> Cambiar contraseña
+            </button>
+            <span id="cpMsg" class="small"></span>
+          </div>
+        </form>
       </div>
     </div>
   </div>
 
-</div>
+</div><!-- /main-content -->
 
-<!-- ── Add Profile Modal ─────────────────────────────────────────────────── -->
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<!--  MODALES                                                               -->
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+
+<!-- Add Profile -->
 <div class="modal fade" id="addProfileModal" tabindex="-1">
   <div class="modal-dialog modal-dialog-centered">
     <div class="modal-content" style="background:var(--card); border-color:var(--card-border)">
@@ -609,7 +730,26 @@
   </div>
 </div>
 
-<!-- Confirm sell modal -->
+<!-- Edit avg price -->
+<div class="modal fade" id="avgPriceModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered modal-sm">
+    <div class="modal-content" style="background:var(--card); border-color:var(--card-border)">
+      <div class="modal-header border-secondary">
+        <h6 class="modal-title"><i class="bi bi-pencil-fill text-info me-2"></i>Corregir precio de compra</h6>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body" id="avgPriceModalBody"></div>
+      <div class="modal-footer border-secondary">
+        <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+        <button type="button" class="btn btn-sm btn-info text-dark" id="confirmAvgPriceBtn">
+          <i class="bi bi-check-lg"></i> Guardar
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Confirm sell -->
 <div class="modal fade" id="sellModal" tabindex="-1">
   <div class="modal-dialog modal-dialog-centered modal-sm">
     <div class="modal-content" style="background:var(--card); border-color:var(--card-border)">
@@ -629,6 +769,9 @@
   </div>
 </div>
 
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<!--  JAVASCRIPT                                                            -->
+<!-- ══════════════════════════════════════════════════════════════════════ -->
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script>
 // ── CSRF fetch interceptor ─────────────────────────────────────────────────
@@ -644,16 +787,39 @@
   };
 })();
 
+// ── Sidebar navigation ─────────────────────────────────────────────────────
+const sectionTitles = {
+  dashboard:     'Dashboard',
+  posiciones:    'Posiciones abiertas',
+  copy:          'Copy Trading',
+  historial:     'Historial',
+  configuracion: 'Configuración',
+};
+
+function showSection(name) {
+  document.querySelectorAll('.page-section').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.sidebar-nav .nav-item').forEach(a => a.classList.remove('active'));
+  const sec = document.getElementById('section-' + name);
+  if (sec) sec.classList.add('active');
+  const navItem = document.querySelector(`.nav-item[data-section="${name}"]`);
+  if (navItem) navItem.classList.add('active');
+  document.getElementById('topBarTitle').textContent = sectionTitles[name] || name;
+  localStorage.setItem('pmbot_section', name);
+}
+
+document.querySelectorAll('.sidebar-nav .nav-item').forEach(a => {
+  a.addEventListener('click', () => showSection(a.dataset.section));
+});
+
 // ── Estado ─────────────────────────────────────────────────────────────────
-let positions       = [];
-let closedPositions = [];
-let pendingSell     = null;
-let botPolling      = null;
+let positions        = [];
+let closedPositions  = [];
+let pendingSell      = null;
 let targetSaveTimers = {};
 
 // ── Utils ──────────────────────────────────────────────────────────────────
 function fmtPct(v) {
-  if (v == null) return '<span class="text-warning" title="Precio de compra aún sincronizando con la API — P&amp;L no disponible">⚠ sincronizando</span>';
+  if (v == null) return '<span class="text-warning" title="Precio de compra aún sincronizando — P&amp;L no disponible">⚠ sincronizando</span>';
   const sign = v >= 0 ? '+' : '';
   return `${sign}${v.toFixed(2)}%`;
 }
@@ -662,8 +828,8 @@ function fmtUsdc(v)  { return v != null ? '$' + v.toFixed(2) : '—'; }
 
 function pnlClass(v) {
   if (v == null) return 'pnl-neutral';
-  if (v > 0)  return 'pnl-positive';
-  if (v < 0)  return 'pnl-negative';
+  if (v > 0) return 'pnl-positive';
+  if (v < 0) return 'pnl-negative';
   return 'pnl-neutral';
 }
 
@@ -707,7 +873,6 @@ document.getElementById('clearLogsBtn').addEventListener('click', () => {
 });
 
 // ── Tabla de posiciones ─────────────────────────────────────────────────────
-// Sort state for each table: { key, dir }  dir = 'asc' | 'desc'
 const sortState = { pos: { key: null, dir: 'asc' }, closed: { key: null, dir: 'asc' } };
 
 function applySortIcons(tableId, key) {
@@ -739,7 +904,6 @@ function sortedList(list, tableId) {
   });
 }
 
-// Wire up sortable-col clicks
 document.addEventListener('click', e => {
   const th = e.target.closest('.sortable-col');
   if (!th) return;
@@ -759,9 +923,11 @@ document.addEventListener('click', e => {
 
 function renderPositions(list) {
   const tbody = document.getElementById('positionsBody');
-  document.getElementById('posCount').textContent = list.length;
+  const count  = list.length;
+  document.getElementById('posCount').textContent       = count;
+  document.getElementById('sidebarPosCount').textContent = count;
 
-  if (!list.length) {
+  if (!count) {
     tbody.innerHTML = `<tr><td colspan="9" class="empty-state">
       <i class="bi bi-inbox fs-4 d-block mb-2"></i>Sin posiciones abiertas</td></tr>`;
     return;
@@ -772,7 +938,6 @@ function renderPositions(list) {
   tbody.innerHTML = sorted.map(p => {
     const targetVal = p.target_pct != null ? p.target_pct : '';
 
-    // Barra de progreso hacia el objetivo
     let progressHTML = '';
     if (p.target_pct != null && p.target_pct > 0) {
       const pct = Math.min(100, Math.max(0, (p.pnl_pct / p.target_pct) * 100));
@@ -790,12 +955,13 @@ function renderPositions(list) {
           <i class="bi bi-gift-fill"></i> Canjear
         </button>`;
     } else {
-      actionHTML = `<button class="btn btn-sm btn-outline-danger py-0 px-2 me-1" ${p.sold ? 'disabled' : ''}
-           onclick="openSellModal('${escHtml(p.token_id)}','${escHtml(p.title)}',${p.size},${p.current_price},${p.cost},${p.net_profit})">
-           <i class="bi bi-cash-coin"></i> Vender
-         </button>`;
+      actionHTML = `
+        <button class="btn btn-sm btn-outline-danger py-0 px-2" ${p.sold ? 'disabled' : ''}
+            onclick="openSellModal('${escHtml(p.token_id)}','${escHtml(p.title)}',${p.size},${p.current_price},${p.cost},${p.net_profit})">
+          <i class="bi bi-cash-coin"></i> Vender
+        </button>`;
     }
-    const hideBtn = `<button class="btn btn-sm btn-outline-secondary py-0 px-1" title="Ocultar esta posición"
+    const hideBtn = `<button class="btn btn-sm btn-outline-secondary py-0 px-1 ms-1" title="Ocultar esta posición"
       onclick="hidePosition('${escHtml(p.token_id)}','${escHtml(p.title)}','${escHtml(p.outcome)}',${p.size},${p.avg_price ?? 0})">
       <i class="bi bi-eye-slash"></i></button>`;
 
@@ -806,7 +972,21 @@ function renderPositions(list) {
     return `<tr class="${rowClass}" data-token="${escHtml(p.token_id)}">
       <td>${shortTitle(p.title)}</td>
       <td>${outcomeHTML(p.outcome)}</td>
-      <td class="text-end text-secondary">${p.cost != null ? fmtUsdc(p.cost) : '—'}</td>
+      <td class="text-end text-secondary">
+        ${p.cost != null ? fmtUsdc(p.cost) : '—'}
+        <br>
+        <span style="font-size:.72rem">
+          <span class="${p.avg_price_override ? 'text-info' : 'text-secondary'}"
+                title="${p.avg_price_override ? '✎ Precio corregido manualmente' : 'Precio medio de compra (Data API)'}">
+            @${p.avg_price != null ? p.avg_price.toFixed(4) : '?'}${p.avg_price_override ? ' ✎' : ''}
+          </span>
+          <button class="btn btn-link p-0 ms-1 text-secondary" style="font-size:.65rem;line-height:1;vertical-align:middle"
+            title="Corregir precio de compra"
+            onclick="openAvgPriceModal('${escHtml(p.token_id)}','${escHtml(p.title)}',${p.avg_price ?? 0},${p.size})">
+            <i class="bi bi-pencil-fill"></i>
+          </button>
+        </span>
+      </td>
       <td class="text-end">${fmtUsdc(p.value)}</td>
       <td class="text-end">
         <span class="${pnlClass(p.net_profit)}" title="${netProfitTip}">
@@ -815,6 +995,7 @@ function renderPositions(list) {
       </td>
       <td class="text-end">
         <span class="${pnlClass(p.pnl_pct)}">${fmtPct(p.pnl_pct)}</span>
+        ${p.pnl_pct != null && Math.abs(p.pnl_pct) > 500 ? `<span class="ms-1 badge bg-warning text-dark" title="Verifica que el precio de compra ($${p.avg_price?.toFixed(4) ?? '?'}) sea correcto.">?</span>` : ''}
         ${progressHTML}
       </td>
       <td class="text-end text-secondary" style="font-size:.78rem">${p.opened_at ?? '—'}</td>
@@ -827,7 +1008,7 @@ function renderPositions(list) {
           <span class="text-secondary">%</span>
         </div>
       </td>
-      <td class="text-center">${actionHTML} ${hideBtn}</td>
+      <td class="text-center">${actionHTML}${hideBtn}</td>
     </tr>`;
   }).join('');
 }
@@ -859,7 +1040,7 @@ async function saveTarget(tokenId) {
 
 // ── Cargar posiciones ─────────────────────────────────────────────────────
 async function loadPositions() {
-  const btn = document.getElementById('refreshBtn');
+  const btn  = document.getElementById('refreshBtn');
   const icon = btn.querySelector('i');
   icon.classList.add('spin');
   btn.disabled = true;
@@ -888,7 +1069,7 @@ async function updateBotStatus() {
     const d = await r.json();
     syncLogs(d.logs || []);
 
-    const badge = document.getElementById('botStatusBadge');
+    const badge    = document.getElementById('botStatusBadge');
     const startBtn = document.getElementById('startBotBtn');
     const stopBtn  = document.getElementById('stopBotBtn');
 
@@ -903,7 +1084,7 @@ async function updateBotStatus() {
       startBtn.disabled = false;
       stopBtn.disabled  = true;
     }
-  } catch { /* silenciar errores de red */ }
+  } catch {}
 }
 
 document.getElementById('startBotBtn').addEventListener('click', async () => {
@@ -916,14 +1097,11 @@ document.getElementById('stopBotBtn').addEventListener('click', async () => {
 });
 document.getElementById('refreshBtn').addEventListener('click', loadPositions);
 
-// Polling de estado del bot cada 5 s
 setInterval(updateBotStatus, 5000);
-
-// Polling de posiciones cada 5 s (el bot las actualiza cada 1 s)
 setInterval(loadPositions, 5000);
 
 // ── Historial de apuestas cerradas ────────────────────────────────────────
-let closedTotal = 0;   // total rows in DB
+let closedTotal = 0;
 
 async function loadClosedPositions(limit = 10, offset = 0) {
   try {
@@ -941,7 +1119,9 @@ async function loadClosedPositions(limit = 10, offset = 0) {
 
 function renderClosedPositions(list, total) {
   const tbody = document.getElementById('closedBody');
-  document.getElementById('closedCount').textContent = total ?? list.length;
+  const count  = total ?? list.length;
+  document.getElementById('closedCount').textContent        = count;
+  document.getElementById('sidebarClosedCount').textContent = count;
 
   const totalProfit = list.reduce((s, p) => s + (p.profit || 0), 0);
   const profitEl = document.getElementById('closedTotalProfit');
@@ -983,10 +1163,8 @@ function renderClosedPositions(list, total) {
     </tr>`;
   }).join('');
 
-  // "Ver más" button
-  const totalRows = total ?? closedTotal;
-  const remaining = totalRows - list.length;
-  const footer    = document.getElementById('closedFooter');
+  const remaining = (total ?? closedTotal) - list.length;
+  const footer = document.getElementById('closedFooter');
   if (remaining > 0) {
     footer.innerHTML = `<tr><td colspan="7" class="text-center py-2">
       <button class="btn btn-sm btn-outline-secondary" onclick="loadMoreClosed(${list.length})">
@@ -1003,50 +1181,34 @@ async function verifyClosePrice(rowId, btn) {
   try {
     const r = await fetch(`/api/positions/closed/${rowId}/verify`, { method: 'POST' });
     const d = await r.json();
-    if (!d.ok) {
-      btn.textContent = '✗';
-      btn.title = d.error;
-      return;
-    }
-    // Update the row in place without full reload
+    if (!d.ok) { btn.textContent = '✗'; btn.title = d.error; return; }
     const row = document.getElementById(`closed-row-${rowId}`);
     if (row) {
       const cells = row.querySelectorAll('td');
-      // cost (index 3)
       cells[3].textContent = fmtUsdc(d.cost);
-      // revenue (index 4) — add verified badge
-      cells[4].innerHTML = fmtUsdc(d.revenue) +
-        '<span class="badge bg-success ms-1" title="Precio real verificado en blockchain">✓</span>';
-      // profit (index 5)
+      cells[4].innerHTML   = fmtUsdc(d.revenue) + '<span class="badge bg-success ms-1" title="Verificado">✓</span>';
       const pClass = d.profit > 0 ? 'pnl-positive' : d.profit < 0 ? 'pnl-negative' : 'pnl-neutral';
-      const pSign  = d.profit > 0 ? '+' : '';
-      cells[5].className = `text-end ${pClass}`;
-      cells[5].textContent = pSign + fmtUsdc(d.profit);
-      // remove verify button from type cell (index 6)
+      cells[5].className   = `text-end ${pClass}`;
+      cells[5].textContent = (d.profit > 0 ? '+' : '') + fmtUsdc(d.profit);
       btn.remove();
     }
-  } catch (e) {
-    btn.textContent = '✗';
-    btn.title = String(e);
-  }
+  } catch (e) { btn.textContent = '✗'; btn.title = String(e); }
 }
 
 async function loadMoreClosed(offset) {
-  await loadClosedPositions(500, offset);  // load up to 500 more
+  await loadClosedPositions(500, offset);
 }
 
-// Polling: only refresh the first 10 (don't overwrite if user expanded)
 setInterval(() => loadClosedPositions(10, 0), 30000);
 
 // ── Configuración ──────────────────────────────────────────────────────────
 async function loadConfig() {
   const r = await fetch('/api/config');
   const d = await r.json();
-  const creds = d.credentials || {};
   if (d.has_private_key) {
     document.getElementById('inputPK').placeholder = '(guardada — dejar en blanco para mantener)';
   }
-  document.getElementById('inputAddress').value = creds.address || '';
+  document.getElementById('inputAddress').value = (d.credentials || {}).address || '';
 }
 
 document.getElementById('configForm').addEventListener('submit', async e => {
@@ -1069,10 +1231,6 @@ document.getElementById('configForm').addEventListener('submit', async e => {
       : '<span class="text-warning"><i class="bi bi-exclamation-triangle-fill"></i> Guardado — cliente CLOB no inicializado (revisa la clave)</span>';
     document.getElementById('inputPK').value = '';
     document.getElementById('inputPK').placeholder = '(guardada — dejar en blanco para mantener)';
-    // Cerrar config panel tras guardar
-    setTimeout(() => {
-      bootstrap.Collapse.getOrCreateInstance(document.getElementById('configPanel')).hide();
-    }, 1200);
   } else {
     msg.innerHTML = '<span class="text-danger">Error al guardar</span>';
   }
@@ -1090,7 +1248,7 @@ async function hidePosition(tokenId, title, outcome, size, avgPrice) {
   loadPositions();
 }
 
-// ── Modal de venta manual ─────────────────────────────────────────────────
+// ── Canjear posición ──────────────────────────────────────────────────────
 async function redeemPosition(tokenId, title, conditionId, outcomeIndex) {
   if (!confirm(`¿Canjear "${title.substring(0,60)}"?\nSe enviará una transacción on-chain.`)) return;
   appendLogs([`[redeem] Canjeando: ${title.substring(0,50)}…`]);
@@ -1102,7 +1260,7 @@ async function redeemPosition(tokenId, title, conditionId, outcomeIndex) {
     });
     const d = await r.json();
     if (d.ok) {
-      appendLogs([`[redeem] ✓ Canjeado correctamente (tx: ${d.tx ? d.tx.substring(0,16) + '…' : 'ok'})`]);
+      appendLogs([`[redeem] ✓ Canjeado (tx: ${d.tx ? d.tx.substring(0,16) + '…' : 'ok'})`]);
       setTimeout(loadPositions, 3000);
     } else {
       appendLogs([`[redeem] Error: ${d.error || 'desconocido'}`]);
@@ -1112,6 +1270,7 @@ async function redeemPosition(tokenId, title, conditionId, outcomeIndex) {
   }
 }
 
+// ── Modal de venta ────────────────────────────────────────────────────────
 const sellModal = new bootstrap.Modal(document.getElementById('sellModal'));
 
 function sellModalRows(price, cost) {
@@ -1147,7 +1306,6 @@ function openSellModal(tokenId, title, size, price, cost, netProfit) {
 function showSlippageWarning(d) {
   const { sent_price, fresh_price, diff_pct } = d;
   const { size, cost } = pendingSell;
-  // update pendingSell with the fresh price so force=true uses it
   pendingSell.price = fresh_price;
   pendingSell.force = true;
 
@@ -1158,7 +1316,7 @@ function showSlippageWarning(d) {
       <span class="text-secondary">Antes: ${fmtPrice(sent_price)} → Ahora: <strong>${fmtPrice(fresh_price)}</strong></span>
     </div>
     <p class="mb-1 text-secondary small">Si vendes ahora:</p>
-    <table class="table table-sm table-borderless text-secondary mb-0" id="sellTable">
+    <table class="table table-sm table-borderless text-secondary mb-0">
       <tr><td>Cantidad</td><td class="text-end text-light">${size}</td></tr>
       ${sellModalRows(fresh_price, cost)}
     </table>`;
@@ -1184,7 +1342,6 @@ document.getElementById('confirmSellBtn').addEventListener('click', async () => 
     const d = await r.json();
 
     if (d.slippage) {
-      // Don't close — show slippage warning inside modal
       showSlippageWarning(d);
       return;
     }
@@ -1192,9 +1349,10 @@ document.getElementById('confirmSellBtn').addEventListener('click', async () => 
     sellModal.hide();
     pendingSell = null;
     if (d.ok) {
-      appendLogs([`[manual] Orden de venta enviada correctamente`]);
+      showToast('Orden de venta ejecutada', 'success');
       setTimeout(loadPositions, 2000);
     } else {
+      showToast(`Venta fallida: ${d.error || 'desconocido'}`, 'error');
       appendLogs([`[manual] Error al vender: ${d.error || 'desconocido'}`]);
     }
   } catch (err) {
@@ -1204,60 +1362,67 @@ document.getElementById('confirmSellBtn').addEventListener('click', async () => 
   }
 });
 
-// ── CSS spin ───────────────────────────────────────────────────────────────
-const style = document.createElement('style');
-style.textContent = `
-  @keyframes spin { to { transform: rotate(360deg); } }
-  .spin { display:inline-block; animation: spin .7s linear infinite; }
-  #toastContainer { position:fixed; bottom:1.25rem; right:1.25rem; z-index:9999; display:flex; flex-direction:column; gap:.5rem; }
-  .app-toast { min-width:280px; max-width:380px; padding:.65rem 1rem; border-radius:8px; font-size:.83rem;
-    color:#fff; box-shadow:0 4px 16px rgba(0,0,0,.5); display:flex; align-items:center; gap:.6rem;
-    animation: toastIn .2s ease; }
-  @keyframes toastIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:none; } }
-  .app-toast.success { background:#166534; border-left:3px solid var(--green); }
-  .app-toast.warning { background:#713f12; border-left:3px solid var(--yellow); }
-  .app-toast.error   { background:#7f1d1d; border-left:3px solid var(--red); }
-  .app-toast.info    { background:#1e3a5f; border-left:3px solid #60a5fa; }
-`;
-document.head.appendChild(style);
+// ── Edit avg price ─────────────────────────────────────────────────────────
+const avgPriceModal = new bootstrap.Modal(document.getElementById('avgPriceModal'));
+let pendingAvgPrice = null;
 
-// ── Toast helper ───────────────────────────────────────────────────────────
-(function () {
-  const container = document.createElement('div');
-  container.id = 'toastContainer';
-  document.body.appendChild(container);
+function openAvgPriceModal(tokenId, title, currentAvg, size) {
+  pendingAvgPrice = { tokenId, size };
+  const cost = currentAvg > 0 ? (currentAvg * size).toFixed(2) : '?';
+  document.getElementById('avgPriceModalBody').innerHTML = `
+    <p class="fw-bold text-light mb-1" style="font-size:.88rem">${escHtml(title)}</p>
+    <p class="text-secondary small mb-2">
+      Valor actual: <strong class="text-light">@${currentAvg > 0 ? currentAvg.toFixed(4) : '?'}</strong>
+      (coste total: <strong class="text-light">$${cost}</strong>)
+    </p>
+    <div class="mb-2">
+      <label class="form-label text-secondary small mb-1">Precio de compra por share</label>
+      <div class="input-group input-group-sm">
+        <span class="input-group-text bg-dark text-secondary border-secondary">$</span>
+        <input type="number" id="avgPriceInput" min="0.001" max="1" step="0.001"
+          class="form-control bg-dark text-light border-secondary"
+          value="${currentAvg > 0 ? currentAvg.toFixed(4) : ''}"
+          placeholder="ej. 0.9500" autofocus />
+      </div>
+    </div>
+    <p class="text-secondary" style="font-size:.75rem">
+      Déjalo vacío o en 0 para eliminar la corrección manual y volver al valor de la API.
+    </p>`;
+  const btn = document.getElementById('confirmAvgPriceBtn');
+  btn.disabled = false;
+  btn.textContent = 'Guardar';
+  avgPriceModal.show();
+  setTimeout(() => document.getElementById('avgPriceInput')?.focus(), 300);
+}
 
-  window.showToast = function (msg, type = 'info', duration = 4000) {
-    const icons = { success: '✓', warning: '⚠', error: '✗', info: 'ℹ' };
-    const el = document.createElement('div');
-    el.className = `app-toast ${type}`;
-    el.innerHTML = `<span style="font-size:1rem">${icons[type] || 'ℹ'}</span><span>${msg}</span>`;
-    container.appendChild(el);
-    setTimeout(() => {
-      el.style.transition = 'opacity .3s';
-      el.style.opacity = '0';
-      setTimeout(() => el.remove(), 320);
-    }, duration);
-  };
-})();
-
-// ── Init ───────────────────────────────────────────────────────────────────
-(async function init() {
-  // Phase 1 — config + bot status (instant, no external API)
-  await Promise.all([loadConfig(), updateBotStatus()]);
-
-  // Phase 2 — open positions FIRST (most important, show ASAP)
-  await loadPositions();
-
-  // Phase 3 — everything else in parallel (stats, historial, copy)
-  Promise.all([
-    loadSessionStats(),
-    loadClosedPositions(),
-    loadCopySettings(),
-    loadCopyProfiles(),
-    updateCopyStatus(),
-  ]);
-})();
+document.getElementById('confirmAvgPriceBtn').addEventListener('click', async () => {
+  if (!pendingAvgPrice) return;
+  const btn   = document.getElementById('confirmAvgPriceBtn');
+  const input = document.getElementById('avgPriceInput');
+  const val   = input ? parseFloat(input.value) : 0;
+  btn.disabled = true;
+  btn.textContent = '…';
+  try {
+    const r = await fetch('/api/avg-price', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token_id: pendingAvgPrice.tokenId, avg_price: val || null })
+    });
+    const d = await r.json();
+    avgPriceModal.hide();
+    pendingAvgPrice = null;
+    if (d.ok) {
+      showToast(val > 0 ? `Precio de compra actualizado: $${val.toFixed(4)}` : 'Corrección eliminada', 'success');
+      setTimeout(loadPositions, 800);
+    } else {
+      showToast(`Error: ${d.error || 'desconocido'}`, 'error');
+    }
+  } catch (err) {
+    avgPriceModal.hide();
+    pendingAvgPrice = null;
+    appendLogs([`[avg_price] Error de red: ${err}`]);
+  }
+});
 
 // ── Copy Trading ────────────────────────────────────────────────────────────
 const addProfileModal = new bootstrap.Modal(document.getElementById('addProfileModal'));
@@ -1273,18 +1438,15 @@ document.getElementById('addProfileBtn').addEventListener('click', () => {
 document.getElementById('profileUrlInput').addEventListener('keydown', e => {
   if (e.key === 'Enter') addProfile();
 });
-
 document.getElementById('confirmAddProfileBtn').addEventListener('click', addProfile);
 
 async function addProfile() {
   const url = document.getElementById('profileUrlInput').value.trim();
   if (!url) return;
-
   const btn = document.getElementById('confirmAddProfileBtn');
   const msg = document.getElementById('addProfileMsg');
   btn.disabled = true;
   msg.innerHTML = '<span class="text-secondary"><span class="spinner-border spinner-border-sm me-1"></span>Resolviendo perfil…</span>';
-
   try {
     const r = await fetch('/api/copy/profiles', {
       method: 'POST',
@@ -1344,32 +1506,31 @@ async function loadCopySettings() {
   try {
     const r = await fetch('/api/copy/settings');
     const s = await r.json();
-    document.getElementById('copyMode').value = s.mode || 'fixed';
-    document.getElementById('fixedAmount').value = s.fixed_amount ?? 1;
-    document.getElementById('dailyBudget').value = s.daily_budget ?? 20;
-    document.getElementById('fixedAmountCol').style.display =
-      s.mode === 'fixed' ? '' : 'none';
+    document.getElementById('copyMode').value        = s.mode || 'fixed';
+    document.getElementById('fixedAmount').value     = s.fixed_amount ?? 1;
+    document.getElementById('dailyBudget').value     = s.daily_budget ?? 20;
+    document.getElementById('minPriceFilter').value  = s.min_price_filter ?? 0;
+    document.getElementById('fixedAmountCol').style.display = s.mode === 'fixed' ? '' : 'none';
     updateBudgetDisplay(s.spent_today || 0, s.daily_budget || 50, s.remaining || 50);
   } catch {}
 }
 
 document.getElementById('copyMode').addEventListener('change', function () {
-  const isFixed = this.value === 'fixed';
-  document.getElementById('fixedAmountCol').style.display = isFixed ? '' : 'none';
-  const label = isFixed ? 'Cantidad fija por trade' : 'Proporcional a su cartera';
-  showToast(`Modo cambiado a: ${label}. Pulsa Guardar para aplicarlo.`, 'warning');
+  document.getElementById('fixedAmountCol').style.display = this.value === 'fixed' ? '' : 'none';
+  showToast(`Modo cambiado. Pulsa Guardar para aplicarlo.`, 'warning');
 });
 
 async function saveCopySettings() {
-  const mode        = document.getElementById('copyMode').value;
-  const fixedAmount = parseFloat(document.getElementById('fixedAmount').value);
-  const dailyBudget = parseFloat(document.getElementById('dailyBudget').value);
-  const msg         = document.getElementById('settingsSaveMsg');
+  const mode           = document.getElementById('copyMode').value;
+  const fixedAmount    = parseFloat(document.getElementById('fixedAmount').value);
+  const dailyBudget    = parseFloat(document.getElementById('dailyBudget').value);
+  const minPriceFilter = parseFloat(document.getElementById('minPriceFilter').value) || 0;
+  const msg            = document.getElementById('settingsSaveMsg');
   try {
     const r = await fetch('/api/copy/settings', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mode, fixed_amount: fixedAmount, daily_budget: dailyBudget })
+      body: JSON.stringify({ mode, fixed_amount: fixedAmount, daily_budget: dailyBudget, min_price_filter: minPriceFilter })
     });
     const d = await r.json();
     if (d.ok) {
@@ -1392,12 +1553,12 @@ document.getElementById('resetBudgetBtn').addEventListener('click', async () => 
 });
 
 function updateBudgetDisplay(spent, daily, remaining) {
-  document.getElementById('spentToday').textContent    = `$${spent.toFixed(2)}`;
+  document.getElementById('spentToday').textContent         = `$${spent.toFixed(2)}`;
   document.getElementById('dailyBudgetDisplay').textContent = `$${daily.toFixed(2)}`;
-  document.getElementById('remainingBudget').textContent   = `$${remaining.toFixed(2)}`;
+  document.getElementById('remainingBudget').textContent    = `$${remaining.toFixed(2)}`;
   const pct = daily > 0 ? Math.min(100, (spent / daily) * 100) : 0;
   const bar = document.getElementById('budgetBar');
-  bar.style.width = `${pct}%`;
+  bar.style.width      = `${pct}%`;
   bar.style.background = pct > 80 ? 'var(--red)' : pct > 50 ? 'var(--yellow)' : 'var(--accent)';
 }
 
@@ -1413,23 +1574,27 @@ async function updateCopyStatus() {
     const badge    = document.getElementById('copyBotBadge');
     const startBtn = document.getElementById('startCopyBtn');
     const stopBtn  = document.getElementById('stopCopyBtn');
+    const sideBadge = document.getElementById('sidebarCopyBadge');
 
     const budgetExhausted = status.running && (status.remaining_budget ?? 1) < 1;
     if (status.running && !budgetExhausted) {
       badge.className = 'bot-badge running';
       badge.innerHTML = '<span class="dot"></span> Activo';
-      startBtn.disabled = true;
-      stopBtn.disabled  = false;
+      sideBadge.style.cssText = 'background:rgba(34,197,94,.2);color:var(--green);margin-left:auto';
+      sideBadge.textContent   = '●';
+      startBtn.disabled = true; stopBtn.disabled = false;
     } else if (budgetExhausted) {
       badge.className = 'bot-badge paused';
       badge.innerHTML = '<span class="dot"></span> En espera — presupuesto agotado';
-      startBtn.disabled = true;
-      stopBtn.disabled  = false;
+      sideBadge.style.cssText = 'background:rgba(234,179,8,.2);color:var(--yellow);margin-left:auto';
+      sideBadge.textContent   = '●';
+      startBtn.disabled = true; stopBtn.disabled = false;
     } else {
       badge.className = 'bot-badge stopped';
       badge.innerHTML = '<span class="dot"></span> Detenido';
-      startBtn.disabled = false;
-      stopBtn.disabled  = true;
+      sideBadge.style.cssText = 'background:rgba(239,68,68,.2);color:var(--red);margin-left:auto';
+      sideBadge.textContent   = '●';
+      startBtn.disabled = false; stopBtn.disabled = true;
     }
 
     updateBudgetDisplay(status.spent_today, status.daily_budget, status.remaining_budget);
@@ -1453,16 +1618,13 @@ function renderCopyTrades(trades) {
                : t.status === 'skipped'  ? 'bi-skip-forward-fill'
                : 'bi-arrow-left-right';
     const sideColor = t.side === 'BUY' ? 'color:var(--green)' : 'color:var(--red)';
-    const amtStr = t.status === 'executed'
-      ? ` <span class="text-light">$${(t.our_amount||0).toFixed(2)}</span>` : '';
-    const reasonStr = t.reason
-      ? ` <span class="text-secondary">— ${escHtml(t.reason)}</span>` : '';
+    const amtStr    = t.status === 'executed' ? ` <span class="text-light">$${(t.our_amount||0).toFixed(2)}</span>` : '';
+    const reasonStr = t.reason ? ` <span class="text-secondary">— ${escHtml(t.reason)}</span>` : '';
     return `<p class="m-0 ${cls}" style="line-height:1.65">` +
       `[${t.ts}] <i class="bi ${icon}"></i> ` +
       `<span style="${sideColor};font-weight:600">${t.side}</span> ` +
       `<span class="text-secondary">@${escHtml(t.profile)}</span> ` +
-      `${escHtml((t.market||'').substring(0,40))}` +
-      `${amtStr}${reasonStr}</p>`;
+      `${escHtml((t.market||'').substring(0,40))}${amtStr}${reasonStr}</p>`;
   }).join('');
   el.scrollTop = el.scrollHeight;
 }
@@ -1483,7 +1645,7 @@ document.getElementById('approveUsdcBtn').addEventListener('click', async () => 
       btn.title = d.error;
       btn.disabled = false;
     }
-  } catch (e) {
+  } catch {
     btn.innerHTML = '<i class="bi bi-x-circle-fill"></i> Error';
     btn.disabled = false;
   }
@@ -1502,19 +1664,17 @@ document.getElementById('clearCopyBtn').addEventListener('click', async () => {
   document.getElementById('copyTradesLog').innerHTML = '<p class="ct-neutral m-0">Sin actividad aún…</p>';
 });
 
-// Poll copy status every 3 s
 setInterval(updateCopyStatus, 3000);
 
-// ── Stats (balance + daily/weekly/monthly/all-time P&L) ───────────────────
+// ── Stats ──────────────────────────────────────────────────────────────────
 function fmtPnl(v) {
   return (v >= 0 ? '+$' : '-$') + Math.abs(v).toFixed(2);
 }
 function applyPnl(elId, pillId, data) {
-  const el = document.getElementById(elId);
+  const el  = document.getElementById(elId);
   const pnl = data.profit ?? 0;
   el.textContent = fmtPnl(pnl);
   el.className = 'stat-value ' + (pnl > 0 ? 'positive' : pnl < 0 ? 'negative' : '');
-  // W/L as tooltip on the pill
   const pill = document.getElementById(pillId);
   if (pill) pill.title = `✅ ${data.won ?? 0}  ❌ ${data.lost ?? 0}`;
 }
@@ -1526,13 +1686,18 @@ async function loadSessionStats() {
     const d = await r.json();
 
     document.getElementById('statBalance').textContent = '$' + (d.balance ?? 0).toFixed(2);
-    const totalEl = document.getElementById('statTotal');
-    totalEl.textContent = '$' + (d.total ?? 0).toFixed(2);
-    document.getElementById('pill-total').title =
-      `Balance USDC: $${(d.balance??0).toFixed(2)} + Apuestas abiertas: $${(d.open_value??0).toFixed(2)}`;
-    applyPnl('statDaily',   'pill-daily',   d.daily   ?? {});
-    applyPnl('statWeekly',  'pill-weekly',  d.weekly  ?? {});
-    applyPnl('statMonthly', 'pill-monthly', d.monthly ?? {});
+    document.getElementById('statTotal').textContent   = '$' + (d.total ?? 0).toFixed(2);
+
+    const openCost   = d.open_cost ?? 0;
+    const openVal    = d.open_value ?? 0;
+    const unrealized = openVal - openCost;
+    document.getElementById('statInJuego').textContent = '$' + openCost.toFixed(2);
+    document.getElementById('pill-injuego').title =
+      `Invertido: $${openCost.toFixed(2)} | Valor actual: $${openVal.toFixed(2)} | No realizado: ${unrealized >= 0 ? '+' : ''}$${unrealized.toFixed(2)}`;
+
+    applyPnl('statDaily',   'pill-daily',   d.daily    ?? {});
+    applyPnl('statWeekly',  'pill-weekly',  d.weekly   ?? {});
+    applyPnl('statMonthly', 'pill-monthly', d.monthly  ?? {});
     applyPnl('statAllTime', 'pill-alltime', d.all_time ?? {});
   } catch {}
 }
@@ -1564,6 +1729,59 @@ document.getElementById('changePwForm').addEventListener('submit', async e => {
     msg.textContent = d.error || 'Error desconocido';
   }
 });
+
+// ── Toasts ─────────────────────────────────────────────────────────────────
+(function () {
+  const style = document.createElement('style');
+  style.textContent = `
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spin { display:inline-block; animation: spin .7s linear infinite; }
+    #toastContainer { position:fixed; bottom:1.25rem; right:1.25rem; z-index:9999; display:flex; flex-direction:column; gap:.5rem; }
+    .app-toast { min-width:260px; max-width:360px; padding:.6rem 1rem; border-radius:8px; font-size:.83rem;
+      color:#fff; box-shadow:0 4px 16px rgba(0,0,0,.5); display:flex; align-items:center; gap:.6rem;
+      animation: toastIn .2s ease; }
+    @keyframes toastIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:none; } }
+    .app-toast.success { background:#166534; border-left:3px solid var(--green); }
+    .app-toast.warning { background:#713f12; border-left:3px solid var(--yellow); }
+    .app-toast.error   { background:#7f1d1d; border-left:3px solid var(--red); }
+    .app-toast.info    { background:#1e3a5f; border-left:3px solid #60a5fa; }
+  `;
+  document.head.appendChild(style);
+
+  const container = document.createElement('div');
+  container.id = 'toastContainer';
+  document.body.appendChild(container);
+
+  window.showToast = function (msg, type = 'info', duration = 4000) {
+    const icons = { success: '✓', warning: '⚠', error: '✗', info: 'ℹ' };
+    const el = document.createElement('div');
+    el.className = `app-toast ${type}`;
+    el.innerHTML = `<span style="font-size:1rem">${icons[type] || 'ℹ'}</span><span>${msg}</span>`;
+    container.appendChild(el);
+    setTimeout(() => {
+      el.style.transition = 'opacity .3s';
+      el.style.opacity = '0';
+      setTimeout(() => el.remove(), 320);
+    }, duration);
+  };
+})();
+
+// ── Init ───────────────────────────────────────────────────────────────────
+(async function init() {
+  // Restore last active section
+  const savedSection = localStorage.getItem('pmbot_section') || 'dashboard';
+  showSection(savedSection);
+
+  await Promise.all([loadConfig(), updateBotStatus()]);
+  await loadPositions();
+  Promise.all([
+    loadSessionStats(),
+    loadClosedPositions(),
+    loadCopySettings(),
+    loadCopyProfiles(),
+    updateCopyStatus(),
+  ]);
+})();
 </script>
 </body>
 </html>

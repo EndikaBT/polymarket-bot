@@ -1,7 +1,27 @@
+# Configuración local (contiene clave privada y credenciales)
 config.json
+config.json.bak
+config.json.*
+
+# Base de datos (contiene credenciales, historial y sesiones)
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Logs
+*.log
+
+# Python
 __pycache__/
 *.pyc
 *.pyo
+
+# Variables de entorno
 .env
+.env.*
+
+# Entornos virtuales
 venv/
 .venv/
