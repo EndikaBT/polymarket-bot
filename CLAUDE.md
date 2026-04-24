@@ -36,7 +36,7 @@ Single-file Flask app (`app.py`) with an in-memory `state` dict as the source of
 
 ### Two independent bots, one shared CLOB client
 
-**Sell bot** (`bot_loop` thread) — polls the user's own positions every 1 s. Auto-assigns a random 25–30% profit target to new positions, sells via market FOK order when target is hit, and sells immediately when `current_price >= 0.95` (near-resolved winner). Auto-hides positions with `current_price < 0.01` (lost markets).
+**Sell bot** (`bot_loop` thread) — polls the user's own positions every 1 s. Sells via market FOK order when a manually set profit target is hit, and sells immediately when `current_price >= 0.95` (near-resolved winner). Auto-hides positions with `current_price < 0.01` (lost markets).
 
 **Copy-trading bot** (`copy_trade_loop` thread) — polls each tracked profile's activity every 1 s. Mirrors BUY trades (with budget cap) and SELL trades. Pauses BUYs when daily budget < $1 but keeps polling to mirror SELLs. Duplicate-buy protection via `copy_positions` dict.
 
