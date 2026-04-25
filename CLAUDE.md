@@ -32,7 +32,18 @@ Opens on `http://localhost:5000`. There are no tests and no build step.
 
 ## Architecture
 
-Single-file Flask app (`app.py`) with an in-memory `state` dict as the source of truth. Everything persists to `config.json` on disk via `save_config()` / `load_config()`.
+Five-module Flask app. `state.py` holds the shared in-memory dict; everything persists to `polymarket.db` (SQLite) via `save_config()` / `load_from_db()`.
+
+| File | Responsibility |
+|------|---------------|
+| `state.py` | Shared `state` dict, constants (`CLOB_HOST`, `TAKER_FEE`, …), `log()` |
+| `db.py` | SQLite helpers, schema, migration from config.json, `record_close`, `credit_budget` |
+| `auth.py` | CSRF tokens, rate limiting, `check_auth` / `security_headers` Flask hooks |
+| `bot.py` | `init_client`, `fetch_positions`, `enrich_positions`, `sell_position`, `redeem_position`, `bot_loop` |
+| `copy_bot.py` | Profile resolution, activity polling, `execute_copy_trade`, `copy_trade_loop` |
+| `app.py` | Flask `app`, all `@app.route` handlers, startup block |
+
+Import chain (no circular deps): `state ← db ← auth ← bot ← copy_bot ← app`
 
 ### Two independent bots, one shared CLOB client
 
