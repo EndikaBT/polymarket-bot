@@ -20,6 +20,7 @@ import requests
 from flask import Flask, jsonify, redirect, render_template, request, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
 
+import notifier
 from auth import (
     _clear_attempts,
     _get_or_create_secret_key,
@@ -46,7 +47,6 @@ from copy_bot import (
     get_portfolio_value,
     resolve_profile_url,
 )
-import notifier
 from db import (
     _db_conn,
     _db_lock,
