@@ -325,7 +325,7 @@ def migrate_from_json():
                 )
 
     os.rename(CONFIG_FILE, BACKUP_FILE)
-    print(f"[migrate] Migración completa. config.json renombrado a config.json.bak")
+    print("[migrate] Migración completa. config.json renombrado a config.json.bak")
 
 
 # ─── Carga inicial desde DB ───────────────────────────────────────────────────

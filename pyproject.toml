@@ -1,0 +1,14 @@
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+# E/W = pycodestyle, F = pyflakes, I = isort
+select = ["E", "W", "F", "I"]
+ignore = [
+    "E501",  # line-too-long — handled per-project style
+    "E741",  # ambiguous variable name (l, O, I) — not critical
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["state", "db", "auth", "bot", "copy_bot", "notifier"]
