@@ -14,7 +14,6 @@ from datetime import datetime
 
 import pytest
 
-
 # ─── Reset del estado global ──────────────────────────────────────────────────
 
 @pytest.fixture(autouse=True)

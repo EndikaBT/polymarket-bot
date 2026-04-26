@@ -7,7 +7,6 @@ las posiciones ocultas y las consultas de PnL por período.
 
 import pytest
 
-
 # ─── record_close ─────────────────────────────────────────────────────────────
 
 class TestRecordClose:

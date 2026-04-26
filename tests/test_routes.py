@@ -9,7 +9,6 @@ import json
 
 import pytest
 
-
 # ─── Autenticación ────────────────────────────────────────────────────────────
 
 class TestAuthGating:

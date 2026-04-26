@@ -164,7 +164,7 @@ python-dotenv==1.2.2
     #   py-clob-client
 pyunormalize==17.0.0
     # via web3
-pywin32==311
+pywin32==311 ; sys_platform == "win32"
     # via web3
 regex==2026.4.4
     # via parsimonious

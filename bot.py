@@ -39,9 +39,9 @@ from state import (
 
 def init_client() -> bool:
     try:
+        from eth_account import Account
         from py_clob_client.client import ClobClient
         from py_clob_client.constants import POLYGON
-        from eth_account import Account
 
         pk = state["credentials"].get("private_key", "")
         if not pk:
