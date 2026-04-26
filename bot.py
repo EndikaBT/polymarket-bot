@@ -11,8 +11,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
 import requests
-from web3 import Web3
-from web3.middleware import ExtraDataToPOAMiddleware
 
 from db import (
     _add_redeemed,
@@ -428,6 +426,8 @@ def redeem_position(token_id: str, title: str,
         return False, "No hay clave privada"
     try:
         from eth_account import Account
+        from web3 import Web3
+        from web3.middleware import ExtraDataToPOAMiddleware
 
         if not condition_id or outcome_index < 0:
             address = state["credentials"].get("address", "").strip()
@@ -559,6 +559,8 @@ def _fetch_usdc_balance() -> float:
     """Devuelve el balance on-chain de USDC.e de la wallet configurada."""
     try:
         from eth_account import Account
+        from web3 import Web3
+        from web3.middleware import ExtraDataToPOAMiddleware
 
         pk      = state["credentials"].get("private_key", "")
         address = state["credentials"].get("address", "")
