@@ -11,4 +11,4 @@ ignore = [
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["state", "db", "auth", "bot", "copy_bot", "notifier"]
+# ruff auto-detects project-root .py files as first-party; no explicit list needed
