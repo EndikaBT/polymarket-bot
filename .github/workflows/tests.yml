@@ -1,0 +1,103 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write   # necesario para crear/actualizar comentarios
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Run tests
+        id: pytest
+        run: |
+          set +e
+          pytest -v 2>&1 | tee pytest-output.txt
+          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+        # continue siempre para que el paso de comentario se ejecute aunque fallen tests
+        continue-on-error: true
+
+      - name: Post PR comment
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const raw = fs.readFileSync('pytest-output.txt', 'utf8').trim();
+
+            // Extraer línea de resumen: "76 passed in 5.03s" o "4 failed, 72 passed…"
+            const lines = raw.split('\n');
+            const summary = lines.filter(l =>
+              /\d+ (passed|failed|error)/.test(l)
+            ).pop() || lines[lines.length - 1];
+
+            const failed = /failed|error/.test(summary);
+            const icon   = failed ? '❌' : '✅';
+
+            // Mantener solo los últimos ~100 líneas para no saturar el comentario
+            const tail = lines.slice(-100).join('\n');
+
+            const body = [
+              `## ${icon} Test Results`,
+              '',
+              `**${summary.trim()}**`,
+              '',
+              '<details>',
+              '<summary>Detalle completo</summary>',
+              '',
+              '```',
+              tail,
+              '```',
+              '</details>',
+            ].join('\n');
+
+            // Upsert: actualizar comentario existente en vez de crear uno nuevo en cada push
+            const marker = '## ✅ Test Results\n## ❌ Test Results';
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const existing = comments.find(c =>
+              c.user.type === 'Bot' &&
+              (c.body.includes('## ✅ Test Results') || c.body.includes('## ❌ Test Results'))
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner:      context.repo.owner,
+                repo:       context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner:        context.repo.owner,
+                repo:         context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+      - name: Fail job if tests failed
+        if: steps.pytest.outputs.exit_code != '0'
+        run: exit 1
