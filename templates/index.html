@@ -645,6 +645,39 @@
       </div>
     </div>
 
+    <!-- Telegram notifications -->
+    <div class="card mb-3">
+      <div class="card-header d-flex align-items-center gap-2">
+        <i class="bi bi-telegram" style="color:#29b6f6"></i>
+        Notificaciones Telegram
+      </div>
+      <div class="card-body">
+        <form id="telegramForm" class="row g-3">
+          <div class="col-md-5">
+            <label class="form-label text-secondary">Bot Token</label>
+            <input type="password" id="tgToken" class="form-control form-control-sm bg-dark text-light border-secondary"
+              placeholder="123456:ABC-DEF..." autocomplete="off" />
+            <div class="form-text text-secondary">Obtenlo de <a href="https://t.me/BotFather" target="_blank" class="text-info">@BotFather</a></div>
+          </div>
+          <div class="col-md-4">
+            <label class="form-label text-secondary">Chat ID</label>
+            <input type="text" id="tgChatId" class="form-control form-control-sm bg-dark text-light border-secondary"
+              placeholder="-100123456789" autocomplete="off" />
+            <div class="form-text text-secondary">ID de tu chat o grupo</div>
+          </div>
+          <div class="col-md-3 d-flex align-items-end gap-2">
+            <button type="submit" class="btn btn-accent btn-sm flex-grow-1">
+              <i class="bi bi-floppy"></i> Guardar
+            </button>
+            <button type="button" id="tgTestBtn" class="btn btn-outline-info btn-sm" title="Enviar mensaje de prueba">
+              <i class="bi bi-send"></i>
+            </button>
+          </div>
+          <div id="tgMsg" class="col-12" style="min-height:20px"></div>
+        </form>
+      </div>
+    </div>
+
     <!-- Change password -->
     <div class="card">
       <div class="card-header d-flex align-items-center gap-2">
@@ -1710,6 +1743,50 @@ document.getElementById('changePwForm').addEventListener('submit', async e => {
   } else {
     msg.className = 'small text-danger';
     msg.textContent = d.error || 'Error desconocido';
+  }
+});
+
+// ── Telegram config ────────────────────────────────────────────────────────
+(async function loadTelegramConfig() {
+  try {
+    const r = await fetch('/api/config/telegram');
+    const d = await r.json();
+    if (d.bot_token) document.getElementById('tgToken').placeholder = d.bot_token;
+    if (d.chat_id)   document.getElementById('tgChatId').value = d.chat_id;
+  } catch {}
+})();
+
+document.getElementById('telegramForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const msg = document.getElementById('tgMsg');
+  msg.textContent = '';
+  const body = {
+    bot_token: document.getElementById('tgToken').value,
+    chat_id:   document.getElementById('tgChatId').value,
+  };
+  const r = await fetch('/api/config/telegram', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const d = await r.json();
+  if (d.ok) {
+    msg.innerHTML = '<span class="text-success small"><i class="bi bi-check-circle-fill me-1"></i>Configuración guardada</span>';
+    document.getElementById('tgToken').value = '';
+  } else {
+    msg.innerHTML = '<span class="text-danger small">' + (d.error || 'Error') + '</span>';
+  }
+});
+
+document.getElementById('tgTestBtn').addEventListener('click', async () => {
+  const msg = document.getElementById('tgMsg');
+  msg.innerHTML = '<span class="text-secondary small">Enviando mensaje de prueba…</span>';
+  const r = await fetch('/api/config/telegram/test', { method: 'POST' });
+  const d = await r.json();
+  if (d.ok) {
+    msg.innerHTML = '<span class="text-success small"><i class="bi bi-check-circle-fill me-1"></i>Mensaje enviado correctamente</span>';
+  } else {
+    msg.innerHTML = '<span class="text-danger small">' + (d.error || 'Error al enviar') + '</span>';
   }
 });
 

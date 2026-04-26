@@ -86,7 +86,8 @@ def _get_or_create_secret_key() -> str:
 
 def check_auth():
     """`app.before_request`: redirige peticiones no autenticadas a /login."""
-    if request.endpoint in ("login", "static"):
+    # Endpoints públicos — sin autenticación ni CSRF
+    if request.endpoint in ("login", "static", "api_health"):
         _get_csrf_token()   # siembra el token para que el formulario pueda incrustarlo
         return
 

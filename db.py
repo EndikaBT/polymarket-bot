@@ -13,6 +13,7 @@ import sqlite3
 import threading
 from datetime import date, datetime
 
+import notifier
 from state import TAKER_FEE, log, state
 
 # ─── Paths ────────────────────────────────────────────────────────────────────
@@ -135,6 +136,30 @@ def _save_settings():
 
 # Alias compatible con los ~15 call sites que usan save_config()
 save_config = _save_settings
+
+
+def load_telegram_config() -> None:
+    """Carga las credenciales Telegram de la DB al estado y al módulo notifier."""
+    with _db_conn() as conn:
+        row = conn.execute("SELECT value FROM kv WHERE key='telegram'").fetchone()
+    if row:
+        cfg = json.loads(row["value"])
+        state["telegram"]["bot_token"] = cfg.get("bot_token", "")
+        state["telegram"]["chat_id"] = cfg.get("chat_id", "")
+        notifier.configure(state["telegram"]["bot_token"], state["telegram"]["chat_id"])
+
+
+def save_telegram_config(bot_token: str, chat_id: str) -> None:
+    """Persiste las credenciales Telegram en la DB y reconfigura el notifier."""
+    state["telegram"]["bot_token"] = bot_token.strip()
+    state["telegram"]["chat_id"] = chat_id.strip()
+    with _db_lock:
+        with _db_conn() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO kv VALUES ('telegram', ?)",
+                (json.dumps({"bot_token": bot_token.strip(), "chat_id": chat_id.strip()}),),
+            )
+    notifier.configure(bot_token.strip(), chat_id.strip())
 
 
 # ─── Helpers de escritura ─────────────────────────────────────────────────────
@@ -403,6 +428,8 @@ def record_close(title: str, outcome: str, size: float, avg_price: float,
     else:
         sess["won"]  += 1 if profit >= 0 else 0
         sess["lost"] += 0 if profit >= 0 else 1
+
+    notifier.notify_close(title, outcome, size, profit, close_type)
 
 
 def purge_settled_losses(active_token_ids: set):
