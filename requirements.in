@@ -1,0 +1,7 @@
+# Direct dependencies — edit this file, then run:
+#   pip-compile requirements.in
+# to regenerate the pinned requirements.txt
+flask>=2.3.0
+requests>=2.31.0
+py-clob-client>=0.14.0
+web3>=6.0.0

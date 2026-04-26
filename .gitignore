@@ -25,3 +25,9 @@ __pycache__/
 # Entornos virtuales
 venv/
 .venv/
+
+# pip-tools
+*.pip
+
+# pre-commit
+.pre-commit-cache/

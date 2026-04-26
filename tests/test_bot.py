@@ -5,10 +5,9 @@ Las llamadas externas (CLOB, Data API, threads) se mockean para
 mantener los tests rápidos y deterministas.
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
-
 
 # ─── sell_position ────────────────────────────────────────────────────────────
 

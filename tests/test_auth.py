@@ -2,9 +2,7 @@
 test_auth.py — Tests de autenticación, CSRF y rate limiting.
 """
 
-import pytest
 from werkzeug.security import generate_password_hash
-
 
 # ─── CSRF helpers ─────────────────────────────────────────────────────────────
 
@@ -12,6 +10,7 @@ class TestCsrfHelpers:
     def test_get_csrf_token_creates_token(self, flask_app):
         with flask_app.test_request_context("/"):
             from flask import session
+
             from auth import _get_csrf_token
 
             token = _get_csrf_token()
@@ -33,6 +32,7 @@ class TestCsrfHelpers:
             headers={"X-CSRF-Token": "mytoken"},
         ):
             from flask import session
+
             from auth import _verify_csrf
 
             session["csrf_token"] = "mytoken"
@@ -44,6 +44,7 @@ class TestCsrfHelpers:
             headers={"X-CSRF-Token": "wrong"},
         ):
             from flask import session
+
             from auth import _verify_csrf
 
             session["csrf_token"] = "correct"

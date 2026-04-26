@@ -12,7 +12,6 @@ import threading
 import time
 
 from flask import jsonify, redirect, request, session, url_for
-from werkzeug.security import generate_password_hash
 
 from db import _db_conn, _db_lock
 

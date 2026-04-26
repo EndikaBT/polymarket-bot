@@ -20,12 +20,10 @@ import requests
 from flask import Flask, jsonify, redirect, render_template, request, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
 
+import notifier
 from auth import (
-    MAX_ATTEMPTS,
     _clear_attempts,
-    _get_csrf_token,
     _get_or_create_secret_key,
-    _login_attempts,
     _rate_limit_check,
     _record_failed,
     check_auth,
@@ -49,16 +47,11 @@ from copy_bot import (
     get_portfolio_value,
     resolve_profile_url,
 )
-import notifier
 from db import (
     _db_conn,
     _db_lock,
-    _delete_copy_position,
     _delete_hidden,
-    _insert_copy_trade,
     _pnl_for_period,
-    _save_settings,
-    _upsert_copy_position,
     _upsert_hidden,
     credit_budget,
     get_remaining_budget,
@@ -715,9 +708,9 @@ def api_copy_diagnose():
         result["balance_error"] = str(e)
         usdc_ok = False
     try:
+        from eth_account import Account
         from web3 import Web3
         from web3.middleware import ExtraDataToPOAMiddleware
-        from eth_account import Account
         pk = state["credentials"].get("private_key", "")
         CTF_ADDRESS       = Web3.to_checksum_address("0x4D97DCd97eC945f40cF65F87097ACe5EA0476045")
         CTF_EXCHANGE      = Web3.to_checksum_address("0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E")
@@ -754,9 +747,9 @@ def api_copy_approve():
     if not pk:
         return jsonify({"ok": False, "error": "No hay clave privada"})
     try:
+        from eth_account import Account
         from web3 import Web3
         from web3.middleware import ExtraDataToPOAMiddleware
-        from eth_account import Account
 
         POLYGON_RPC       = "https://polygon-bor-rpc.publicnode.com"
         USDC_ADDRESS      = Web3.to_checksum_address("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174")

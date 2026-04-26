@@ -16,9 +16,9 @@ import requests
 from bot import (
     _seed_avg_price_from_fill,
     check_and_redeem,
+    fetch_fill_price,
     get_best_bid,
     sell_position,
-    fetch_fill_price,
 )
 from db import (
     _add_spent,
@@ -27,7 +27,6 @@ from db import (
     _upsert_copy_position,
     credit_budget,
     get_remaining_budget,
-    record_close,
     save_config,
 )
 from state import DATA_HOST, SCRAPE_HEADERS, log, state
