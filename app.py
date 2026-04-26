@@ -9,10 +9,12 @@ Toda la lógica de negocio vive en los módulos especializados:
   copy_bot.py — bot de copy trading
 """
 
+import atexit
 import secrets
+import signal
 import threading
 import time
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import requests
 from flask import Flask, jsonify, redirect, render_template, request, session, url_for
@@ -47,6 +49,7 @@ from copy_bot import (
     get_portfolio_value,
     resolve_profile_url,
 )
+import notifier
 from db import (
     _db_conn,
     _db_lock,
@@ -62,11 +65,13 @@ from db import (
     get_spent_today,
     init_db,
     load_from_db,
+    load_telegram_config,
     migrate_from_json,
     record_close,
     save_config,
+    save_telegram_config,
 )
-from state import DATA_HOST, SLIPPAGE_WARN, TAKER_FEE, log, state
+from state import DATA_HOST, SLIPPAGE_WARN, TAKER_FEE, log, setup_file_logging, state
 
 # ─── Aplicación Flask ─────────────────────────────────────────────────────────
 
@@ -114,6 +119,43 @@ def api_set_config():
     save_config()
     init_client()
     return jsonify({"ok": True, "client_ready": state["client"] is not None})
+
+
+@app.route("/api/config/telegram", methods=["GET"])
+def api_telegram_get():
+    cfg = state["telegram"]
+    token = cfg.get("bot_token", "")
+    return jsonify({
+        "bot_token": "••••" + token[-4:] if len(token) > 4 else ("••••" if token else ""),
+        "chat_id": cfg.get("chat_id", ""),
+        "configured": notifier.is_configured(),
+    })
+
+
+@app.route("/api/config/telegram", methods=["POST"])
+def api_telegram_set():
+    data = request.get_json(force=True, silent=True) or {}
+    bot_token = data.get("bot_token", "")
+    chat_id = data.get("chat_id", "")
+    if bot_token.startswith("••••"):
+        bot_token = state["telegram"].get("bot_token", "")
+    save_telegram_config(bot_token, chat_id)
+    log(f"[telegram] Configuración actualizada — configurado: {notifier.is_configured()}")
+    return jsonify({"ok": True, "configured": notifier.is_configured()})
+
+
+@app.route("/api/config/telegram/test", methods=["POST"])
+def api_telegram_test():
+    if not notifier.is_configured():
+        return jsonify({"ok": False, "error": "Telegram no configurado"}), 400
+    ok = notifier.send("✅ Polymarket Bot — notificaciones funcionando correctamente")
+    return jsonify({"ok": ok, "error": None if ok else "Error al enviar mensaje. Verifica el token y chat_id."})
+
+
+@app.route("/api/health", methods=["GET"])
+def api_health():
+    """Sonda de disponibilidad — no requiere autenticación."""
+    return jsonify({"ok": True, "ts": datetime.utcnow().isoformat() + "Z"})
 
 
 # ─── Rutas API — Posiciones ───────────────────────────────────────────────────
@@ -868,12 +910,48 @@ def logout():
     return redirect(url_for("login"))
 
 
+# ─── Apagado limpio ───────────────────────────────────────────────────────────
+
+_shutdown_event = threading.Event()
+
+
+def _graceful_shutdown(signum=None, frame=None) -> None:  # noqa: ARG001
+    """Detiene los hilos de bots antes de que el proceso termine."""
+    if _shutdown_event.is_set():
+        return
+    _shutdown_event.set()
+    log("[app] Señal de apagado recibida — deteniendo bots...")
+    state["bot_running"] = False
+    state["copy_running"] = False
+    for attr in ("bot_thread", "copy_thread"):
+        t = state.get(attr)
+        if t and t.is_alive():
+            t.join(timeout=3)
+    log("[app] Apagado limpio completado")
+
+
+atexit.register(_graceful_shutdown)
+
+for _sig in (signal.SIGTERM, signal.SIGINT):
+    try:
+        signal.signal(_sig, _graceful_shutdown)
+    except (OSError, ValueError):
+        pass
+if hasattr(signal, "SIGBREAK"):
+    try:
+        signal.signal(signal.SIGBREAK, _graceful_shutdown)  # type: ignore[attr-defined]
+    except (OSError, ValueError):
+        pass
+
+
 # ─── Arranque ─────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    setup_file_logging()
     init_db()
     migrate_from_json()
     load_from_db()
+    load_telegram_config()
     if state["credentials"].get("private_key"):
         init_client()
     app.secret_key = _get_or_create_secret_key()

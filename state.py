@@ -5,6 +5,8 @@ Todos los módulos importan desde aquí; este fichero no importa de ningún
 otro módulo propio para evitar dependencias circulares.
 """
 
+import logging
+import logging.handlers
 from datetime import datetime
 
 # ─── Estado global ────────────────────────────────────────────────────────────
@@ -49,6 +51,11 @@ state: dict = {
     },
     "copy_running": False,
     "copy_thread": None,
+    # ── Telegram notifications ────────────────────────────────────────────────
+    "telegram": {
+        "bot_token": "",
+        "chat_id": "",
+    },
 }
 
 # ─── Constantes ───────────────────────────────────────────────────────────────
@@ -72,6 +79,22 @@ SCRAPE_HEADERS = {
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
 
+_logger = logging.getLogger("pmbot")
+
+
+def setup_file_logging(log_path: str = "polymarket.log") -> None:
+    """Adjunta un RotatingFileHandler al logger 'pmbot'.
+
+    Los archivos rotan a 5 MB; se conservan 3 copias de seguridad.
+    Se llama una vez en el arranque desde app.py.
+    """
+    handler = logging.handlers.RotatingFileHandler(
+        log_path, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
+    )
+    handler.setFormatter(logging.Formatter("%(asctime)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+    _logger.addHandler(handler)
+    _logger.setLevel(logging.INFO)
+
 
 def log(msg: str) -> None:
     entry = f"[{datetime.now().strftime('%H:%M:%S')}] {msg}"
@@ -79,3 +102,4 @@ def log(msg: str) -> None:
     if len(state["logs"]) > 200:
         state["logs"] = state["logs"][-200:]
     print(entry)
+    _logger.info(msg)
