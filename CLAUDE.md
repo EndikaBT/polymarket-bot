@@ -2,6 +2,12 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Permissions
+
+- Make any code change and push it to a PR without asking for permission first.
+- **Never merge to `main`** without explicit user approval.
+- Don't ask for confirmation before editing files, creating branches, or opening PRs.
+
 ## Git workflow
 
 **Never push directly to `main`.** Always create a feature branch and open a PR:
