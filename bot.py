@@ -212,8 +212,7 @@ def enrich_positions(raw_positions: list) -> list:
             entry["hidden_meta"] = meta
             fetch_ids.append(token_id)
         else:
-            if cur_price_api > 0:
-                fetch_ids.append(token_id)
+            fetch_ids.append(token_id)  # siempre consultar precio en vivo
 
         parsed.append(entry)
 
@@ -265,7 +264,11 @@ def enrich_positions(raw_positions: list) -> list:
 
         current = live_price if live_price > 0 else cur_price_api
 
-        if current < 0.01:
+        # Solo ocultar como "perdida" si tenemos precio confirmado (live_price > 0) y es < 0.01.
+        # Si live_price == 0 pero cur_price_api también == 0 podría ser lag de la API:
+        # en ese caso no ocultamos para evitar falsos negativos en posiciones recién compradas.
+        price_confirmed = live_price > 0 or cur_price_api > 0
+        if price_confirmed and current < 0.01:
             is_new = token_id not in state["hidden_tokens"]
             meta = {
                 "title": title, "outcome": outcome,
