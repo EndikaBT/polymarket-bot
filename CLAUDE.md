@@ -63,13 +63,16 @@ Import chain (no circular deps): `state ← db ← auth ← bot ← copy_bot ←
 - Polygon RPC: `https://polygon-bor-rpc.publicnode.com` (polygon-rpc.com returns 403)
 
 ### On-chain interactions (web3.py)
-- **USDC approvals** (`/api/copy/approve`): ERC20 `approve()` to CTF Exchange + Neg Risk CTF Exchange, plus ERC1155 `setApprovalForAll()` on Conditional Tokens contract (`0x4D97DCd97eC945f40cF65F87097ACe5EA0476045`) to both exchanges — required before any trade
+- **pUSD approvals** (`/api/copy/approve`): ERC20 `approve()` to CTF Exchange + Neg Risk CTF Exchange, plus ERC1155 `setApprovalForAll()` on Conditional Tokens contract (`0x4D97DCd97eC945f40cF65F87097ACe5EA0476045`) to both exchanges — required before any trade
 - **Redemption** (`redeem_position()`): calls `redeemPositions()` on the CTF contract; looks up `conditionId` and outcome index from Gamma API first
 
-### Wallet setup
-- USDC.e (`0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174`) on Polygon — not native USDC
+### Wallet setup (Polymarket V2)
+- pUSD (`0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB`) on Polygon — replaced USDC.e in the V2 migration
+- CTF Exchange V2: `0xE111180000d2663C0091e4f400237545B87B996B`
+- Neg Risk Exchange V2: `0xe2222d279d744050d28e00520010520000310F59`
+- CTF Contract (unchanged): `0x4D97DCd97eC945f40cF65F87097ACe5EA0476045`
 - `signature_type=0` (EOA) when private key derives to the same address as configured; `signature_type=2` (proxy) otherwise — auto-detected in `init_client()`
-- `sell_position()` and `execute_copy_trade()` use `MarketOrderArgs` + `OrderType.FOK`
+- `sell_position()` and `execute_copy_trade()` use `MarketOrderArgsV2` + `OrderType.FOK` (py-clob-client-v2)
 
 ### UI
 Single-page Bootstrap 5 dark theme (`templates/index.html`). No framework — vanilla JS with `setInterval` polling (`/api/bot/status` every 5 s, positions every 5 s, copy status every 3 s). SSE is not used.

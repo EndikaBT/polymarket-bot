@@ -713,8 +713,8 @@ def api_copy_diagnose():
         from web3.middleware import ExtraDataToPOAMiddleware
         pk = state["credentials"].get("private_key", "")
         CTF_ADDRESS       = Web3.to_checksum_address("0x4D97DCd97eC945f40cF65F87097ACe5EA0476045")
-        CTF_EXCHANGE      = Web3.to_checksum_address("0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E")
-        NEG_RISK_EXCHANGE = Web3.to_checksum_address("0xC5d563A36AE78145C45a50134d48A1215220f80a")
+        CTF_EXCHANGE      = Web3.to_checksum_address("0xE111180000d2663C0091e4f400237545B87B996B")  # V2
+        NEG_RISK_EXCHANGE = Web3.to_checksum_address("0xe2222d279d744050d28e00520010520000310F59")  # V2
         ERC1155_ABI = [{"inputs": [{"name": "account", "type": "address"}, {"name": "operator", "type": "address"}],
                         "name": "isApprovedForAll", "outputs": [{"name": "", "type": "bool"}],
                         "type": "function", "stateMutability": "view"}]
@@ -752,10 +752,10 @@ def api_copy_approve():
         from web3.middleware import ExtraDataToPOAMiddleware
 
         POLYGON_RPC       = "https://polygon-bor-rpc.publicnode.com"
-        USDC_ADDRESS      = Web3.to_checksum_address("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174")
+        USDC_ADDRESS      = Web3.to_checksum_address("0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB")  # pUSD (V2)
         CTF_ADDRESS       = Web3.to_checksum_address("0x4D97DCd97eC945f40cF65F87097ACe5EA0476045")
-        CTF_EXCHANGE      = Web3.to_checksum_address("0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E")
-        NEG_RISK_EXCHANGE = Web3.to_checksum_address("0xC5d563A36AE78145C45a50134d48A1215220f80a")
+        CTF_EXCHANGE      = Web3.to_checksum_address("0xE111180000d2663C0091e4f400237545B87B996B")  # V2
+        NEG_RISK_EXCHANGE = Web3.to_checksum_address("0xe2222d279d744050d28e00520010520000310F59")  # V2
         MAX_UINT256       = 2**256 - 1
 
         ERC20_ABI   = [{"inputs": [{"name": "spender", "type": "address"}, {"name": "amount", "type": "uint256"}],

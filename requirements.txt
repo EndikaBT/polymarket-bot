@@ -43,7 +43,7 @@ eth-abi==5.2.0
     #   web3
 eth-account==0.13.7
     # via
-    #   py-clob-client
+    #   py-clob-client-v2
     #   py-order-utils
     #   web3
 eth-hash[pycryptodome]==0.8.0
@@ -72,7 +72,7 @@ eth-utils==6.0.0
     #   eth-keys
     #   eth-rlp
     #   poly-eip712-structs
-    #   py-clob-client
+    #   py-clob-client-v2
     #   py-order-utils
     #   rlp
     #   web3
@@ -96,7 +96,7 @@ hpack==4.1.0
 httpcore==1.0.9
     # via httpx
 httpx[http2]==0.28.1
-    # via py-clob-client
+    # via py-clob-client-v2
 hyperframe==6.1.0
     # via h2
 idna==3.13
@@ -128,18 +128,16 @@ pluggy==1.6.0
     # via pytest
 poly-eip712-structs==0.0.1
     # via
-    #   py-clob-client
+    #   py-clob-client-v2
     #   py-order-utils
 propcache==0.4.1
     # via
     #   aiohttp
     #   yarl
-py-builder-signing-sdk==0.0.2
-    # via py-clob-client
-py-clob-client==0.34.6
+py-clob-client-v2==1.0.0
     # via -r requirements.in
 py-order-utils==0.3.2
-    # via py-clob-client
+    # via py-clob-client-v2
 pycryptodome==3.23.0
     # via
     #   eth-hash
@@ -158,10 +156,6 @@ pytest==9.0.3
     # via
     #   poly-eip712-structs
     #   py-order-utils
-python-dotenv==1.2.2
-    # via
-    #   py-builder-signing-sdk
-    #   py-clob-client
 pyunormalize==17.0.0
     # via web3
 pywin32==311 ; sys_platform == "win32"
@@ -171,7 +165,6 @@ regex==2026.4.4
 requests==2.33.1
     # via
     #   -r requirements.in
-    #   py-builder-signing-sdk
     #   web3
 rlp==4.1.0
     # via

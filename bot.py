@@ -40,8 +40,8 @@ from state import (
 def init_client() -> bool:
     try:
         from eth_account import Account
-        from py_clob_client.client import ClobClient
-        from py_clob_client.constants import POLYGON
+        from py_clob_client_v2.client import ClobClient
+        from py_clob_client_v2.constants import POLYGON
 
         pk = state["credentials"].get("private_key", "")
         if not pk:
@@ -383,7 +383,7 @@ def sell_position(token_id: str, size: float, price: float | None = None,
     if not client:
         return False, "Cliente CLOB no inicializado"
     try:
-        from py_clob_client.clob_types import MarketOrderArgs, OrderType
+        from py_clob_client_v2.clob_types import MarketOrderArgsV2 as MarketOrderArgs, OrderType
 
         if floor_override is not None:
             floor = round(float(floor_override), 4)
@@ -454,7 +454,7 @@ def redeem_position(token_id: str, title: str,
         acct = Account.from_key(pk)
 
         CTF_ADDRESS  = Web3.to_checksum_address("0x4D97DCd97eC945f40cF65F87097ACe5EA0476045")
-        USDC_ADDRESS = Web3.to_checksum_address("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174")
+        USDC_ADDRESS = Web3.to_checksum_address("0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB")  # pUSD (V2)
         ZERO_BYTES32 = b"\x00" * 32
 
         CTF_ABI = [{
@@ -571,7 +571,7 @@ def _fetch_usdc_balance() -> float:
         if not address:
             address = Account.from_key(pk).address
         addr = Web3.to_checksum_address(address)
-        USDC = Web3.to_checksum_address("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174")
+        USDC = Web3.to_checksum_address("0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB")  # pUSD (V2)
         abi  = [{"inputs": [{"name": "account", "type": "address"}], "name": "balanceOf",
                  "outputs": [{"name": "", "type": "uint256"}], "type": "function",
                  "stateMutability": "view"}]
