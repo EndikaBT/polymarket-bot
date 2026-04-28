@@ -202,7 +202,7 @@ class TestHide:
 
 class TestStats:
     def test_returns_expected_structure(self, auth_client, monkeypatch):
-        monkeypatch.setattr("app._fetch_usdc_balance", lambda: 100.0)
+        monkeypatch.setattr("app._get_cached_balance", lambda: 100.0)
         c, _ = auth_client
 
         resp = c.get("/api/stats")
@@ -214,7 +214,7 @@ class TestStats:
             assert key in data, f"Falta campo: {key}"
 
     def test_balance_comes_from_wallet(self, auth_client, monkeypatch):
-        monkeypatch.setattr("app._fetch_usdc_balance", lambda: 42.5)
+        monkeypatch.setattr("app._get_cached_balance", lambda: 42.5)
         c, _ = auth_client
 
         resp = c.get("/api/stats")

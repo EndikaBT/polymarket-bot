@@ -59,7 +59,7 @@ def init_client() -> bool:
 
         client = ClobClient(CLOB_HOST, key=pk, chain_id=POLYGON,
                             signature_type=sig_type, funder=funder)
-        client.set_api_creds(client.create_or_derive_api_creds())
+        client.set_api_creds(client.create_or_derive_api_key())
         state["client"] = client
         log(f"Cliente CLOB listo | signer={signer_addr} | funder={funder or signer_addr} | sig_type={sig_type}")
         return True
@@ -161,11 +161,12 @@ def enrich_positions(raw_positions: list) -> list:
 
             if token_id not in state["known_positions"]:
                 state["known_positions"].add(token_id)
-                if not fill_seeded:
-                    seed_ts = bought_at if bought_at else now - 7 * 86400
+                # Solo hacer seeding para copy trades recientes (bought_at conocido).
+                # Las posiciones manuales ya tienen avgPrice estable en la Data API.
+                if not fill_seeded and bought_at:
                     threading.Thread(
                         target=_seed_avg_price_from_fill,
-                        args=(token_id, 0, seed_ts),
+                        args=(token_id, 0, bought_at),
                         daemon=True,
                     ).start()
 
@@ -211,8 +212,7 @@ def enrich_positions(raw_positions: list) -> list:
             entry["hidden_meta"] = meta
             fetch_ids.append(token_id)
         else:
-            if cur_price_api > 0:
-                fetch_ids.append(token_id)
+            fetch_ids.append(token_id)  # siempre consultar precio en vivo
 
         parsed.append(entry)
 
@@ -264,7 +264,11 @@ def enrich_positions(raw_positions: list) -> list:
 
         current = live_price if live_price > 0 else cur_price_api
 
-        if current < 0.01:
+        # Solo ocultar como "perdida" si tenemos precio confirmado (live_price > 0) y es < 0.01.
+        # Si live_price == 0 pero cur_price_api también == 0 podría ser lag de la API:
+        # en ese caso no ocultamos para evitar falsos negativos en posiciones recién compradas.
+        price_confirmed = live_price > 0 or cur_price_api > 0
+        if price_confirmed and current < 0.01:
             is_new = token_id not in state["hidden_tokens"]
             meta = {
                 "title": title, "outcome": outcome,
