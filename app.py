@@ -66,6 +66,21 @@ from db import (
 )
 from state import DATA_HOST, SLIPPAGE_WARN, TAKER_FEE, log, setup_file_logging, state
 
+# ─── Balance cache ────────────────────────────────────────────────────────────
+
+_balance_cache: dict = {"value": 0.0, "ts": 0.0}
+_BALANCE_TTL = 30.0  # segundos entre consultas on-chain
+
+
+def _get_cached_balance() -> float:
+    now = time.time()
+    if now - _balance_cache["ts"] > _BALANCE_TTL:
+        val = _fetch_usdc_balance()
+        _balance_cache["value"] = val
+        _balance_cache["ts"] = now
+    return _balance_cache["value"]
+
+
 # ─── Aplicación Flask ─────────────────────────────────────────────────────────
 
 app = Flask(__name__)
@@ -483,14 +498,14 @@ def api_sell():
 @app.route("/api/session", methods=["GET"])
 def api_session():
     return jsonify({
-        "balance": round(_fetch_usdc_balance(), 2),
+        "balance": round(_get_cached_balance(), 2),
         **_pnl_for_period("date(ts) = date('now')"),
     })
 
 
 @app.route("/api/stats", methods=["GET"])
 def api_stats():
-    balance        = _fetch_usdc_balance()
+    balance        = _get_cached_balance()
     open_positions = [p for p in state.get("positions", []) if not p.get("sold")]
     open_value     = sum(p.get("value", 0) or 0 for p in open_positions)
     open_cost      = sum(p.get("cost",  0) or 0 for p in open_positions)
