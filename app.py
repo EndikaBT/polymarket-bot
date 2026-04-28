@@ -170,11 +170,14 @@ def api_health():
 
 @app.route("/api/positions", methods=["GET"])
 def api_positions():
-    raw      = fetch_positions()
-    enriched = enrich_positions(raw)
-    state["positions"]   = enriched
-    state["last_update"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-    return jsonify({"positions": enriched, "last_update": state["last_update"]})
+    # Si el bot está corriendo, ya mantiene state["positions"] actualizado cada ciclo.
+    # Solo re-fetcheamos si no hay datos cacheados o el bot está parado.
+    if not state["bot_running"] or not state.get("positions"):
+        raw      = fetch_positions()
+        enriched = enrich_positions(raw)
+        state["positions"]   = enriched
+        state["last_update"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+    return jsonify({"positions": state["positions"], "last_update": state.get("last_update", "")})
 
 
 @app.route("/api/positions/raw", methods=["GET"])
