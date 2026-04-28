@@ -59,7 +59,7 @@ def init_client() -> bool:
 
         client = ClobClient(CLOB_HOST, key=pk, chain_id=POLYGON,
                             signature_type=sig_type, funder=funder)
-        client.set_api_creds(client.create_or_derive_api_creds())
+        client.set_api_creds(client.create_or_derive_api_key())
         state["client"] = client
         log(f"Cliente CLOB listo | signer={signer_addr} | funder={funder or signer_addr} | sig_type={sig_type}")
         return True
