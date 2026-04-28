@@ -161,11 +161,12 @@ def enrich_positions(raw_positions: list) -> list:
 
             if token_id not in state["known_positions"]:
                 state["known_positions"].add(token_id)
-                if not fill_seeded:
-                    seed_ts = bought_at if bought_at else now - 7 * 86400
+                # Solo hacer seeding para copy trades recientes (bought_at conocido).
+                # Las posiciones manuales ya tienen avgPrice estable en la Data API.
+                if not fill_seeded and bought_at:
                     threading.Thread(
                         target=_seed_avg_price_from_fill,
-                        args=(token_id, 0, seed_ts),
+                        args=(token_id, 0, bought_at),
                         daemon=True,
                     ).start()
 
