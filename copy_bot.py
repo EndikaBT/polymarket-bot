@@ -165,7 +165,11 @@ def execute_copy_trade(token_id: str, amount_usdc: float) -> tuple[bool, str]:
             log(f"[order] maker={maker} | sig_type={sig_type} | sig={str(sig)[:20]}…")
         except Exception:
             log(f"[order] raw={str(signed)[:120]}")
-        resp = client.post_order(signed, OrderType.FOK)
+        resp      = client.post_order(signed, OrderType.FOK)
+        resp_dict = resp if isinstance(resp, dict) else (resp.__dict__ if hasattr(resp, "__dict__") else {})
+        status    = str(resp_dict.get("status", "")).lower()
+        if status in ("cancelled", "canceled", "unmatched"):
+            return False, f"Orden FOK no ejecutada — sin liquidez (estado: {status})"
         return True, str(resp)
     except Exception as e:
         return False, str(e)
