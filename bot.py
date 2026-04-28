@@ -462,21 +462,41 @@ def redeem_position(token_id: str, title: str,
         USDC_ADDRESS = Web3.to_checksum_address("0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB")  # pUSD (V2)
         ZERO_BYTES32 = b"\x00" * 32
 
-        CTF_ABI = [{
-            "inputs": [
-                {"name": "collateralToken",    "type": "address"},
-                {"name": "parentCollectionId", "type": "bytes32"},
-                {"name": "conditionId",        "type": "bytes32"},
-                {"name": "indexSets",          "type": "uint256[]"},
-            ],
-            "name": "redeemPositions",
-            "outputs": [],
-            "type": "function",
-            "stateMutability": "nonpayable",
-        }]
+        CTF_ABI = [
+            {
+                "inputs": [
+                    {"name": "collateralToken",    "type": "address"},
+                    {"name": "parentCollectionId", "type": "bytes32"},
+                    {"name": "conditionId",        "type": "bytes32"},
+                    {"name": "indexSets",          "type": "uint256[]"},
+                ],
+                "name": "redeemPositions",
+                "outputs": [],
+                "type": "function",
+                "stateMutability": "nonpayable",
+            },
+            {
+                "inputs": [
+                    {"name": "account", "type": "address"},
+                    {"name": "id",      "type": "uint256"},
+                ],
+                "name": "balanceOf",
+                "outputs": [{"name": "", "type": "uint256"}],
+                "type": "function",
+                "stateMutability": "view",
+            },
+        ]
 
         ctf       = w3.eth.contract(address=CTF_ADDRESS, abi=CTF_ABI)
         cid_bytes = bytes.fromhex(condition_id.replace("0x", ""))
+
+        # Capturar balance antes del canje para poder comparar después
+        token_id_int  = int(token_id)
+        balance_before = 0
+        try:
+            balance_before = ctf.functions.balanceOf(acct.address, token_id_int).call()
+        except Exception:
+            pass
 
         tx = ctf.functions.redeemPositions(
             USDC_ADDRESS, ZERO_BYTES32, cid_bytes, [index_set]
@@ -492,6 +512,22 @@ def redeem_position(token_id: str, title: str,
         receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=60)
 
         if receipt.status == 1:
+            # Verificar que los tokens ERC1155 se quemaron realmente.
+            # Un reorg puede devolver receipt.status==1 pero dejar la tx sin minar.
+            balance_after = 0
+            try:
+                balance_after = ctf.functions.balanceOf(acct.address, token_id_int).call()
+            except Exception:
+                pass
+
+            if balance_before > 0 and balance_after >= balance_before:
+                msg = (
+                    f"Receipt OK pero balance no cambió ({balance_after} tokens) "
+                    "— posible reorg de Polygon. La posición NO se marcará como canjeada."
+                )
+                log(f"[redeem] ⚠ {msg}")
+                return False, msg
+
             _add_redeemed(token_id)
             log(f"[redeem] ✓ Canjeado: {title[:45]} (tx: {tx_hash.hex()[:16]}…)")
             return True, tx_hash.hex()
