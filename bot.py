@@ -383,7 +383,8 @@ def sell_position(token_id: str, size: float, price: float | None = None,
     if not client:
         return False, "Cliente CLOB no inicializado"
     try:
-        from py_clob_client_v2.clob_types import MarketOrderArgsV2 as MarketOrderArgs, OrderType
+        from py_clob_client_v2.clob_types import MarketOrderArgsV2 as MarketOrderArgs
+        from py_clob_client_v2.clob_types import OrderType
 
         if floor_override is not None:
             floor = round(float(floor_override), 4)

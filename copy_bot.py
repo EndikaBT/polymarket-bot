@@ -153,7 +153,8 @@ def execute_copy_trade(token_id: str, amount_usdc: float) -> tuple[bool, str]:
     if not client:
         return False, "Cliente CLOB no inicializado — configura tu clave privada"
     try:
-        from py_clob_client_v2.clob_types import MarketOrderArgsV2 as MarketOrderArgs, OrderType
+        from py_clob_client_v2.clob_types import MarketOrderArgsV2 as MarketOrderArgs
+        from py_clob_client_v2.clob_types import OrderType
 
         order_args = MarketOrderArgs(token_id=token_id, amount=amount_usdc, side="BUY")
         signed     = client.create_market_order(order_args)
