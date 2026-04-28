@@ -711,7 +711,7 @@ def api_copy_diagnose():
     except Exception as e:
         result["signer_address_error"] = str(e)
     try:
-        from py_clob_client.clob_types import AssetType, BalanceAllowanceParams
+        from py_clob_client_v2.clob_types import AssetType, BalanceAllowanceParams
         bal  = client.get_balance_allowance(BalanceAllowanceParams(asset_type=AssetType.COLLATERAL))
         if hasattr(bal, "__dict__"):
             bal = bal.__dict__
@@ -810,7 +810,7 @@ def api_copy_approve():
 
         client = state.get("client")
         if client:
-            from py_clob_client.clob_types import AssetType, BalanceAllowanceParams
+            from py_clob_client_v2.clob_types import AssetType, BalanceAllowanceParams
             try:
                 client.update_balance_allowance(BalanceAllowanceParams(asset_type=AssetType.COLLATERAL))
                 client.update_balance_allowance(BalanceAllowanceParams(asset_type=AssetType.CONDITIONAL))
