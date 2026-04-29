@@ -458,9 +458,10 @@ def redeem_position(token_id: str, title: str,
         w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
         acct = Account.from_key(pk)
 
-        CTF_ADDRESS  = Web3.to_checksum_address("0x4D97DCd97eC945f40cF65F87097ACe5EA0476045")
-        USDC_ADDRESS = Web3.to_checksum_address("0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB")  # pUSD (V2)
-        ZERO_BYTES32 = b"\x00" * 32
+        CTF_ADDRESS   = Web3.to_checksum_address("0x4D97DCd97eC945f40cF65F87097ACe5EA0476045")
+        PUSD_ADDRESS  = Web3.to_checksum_address("0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB")  # pUSD (V2)
+        USDCE_ADDRESS = Web3.to_checksum_address("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174")  # USDC.e (V1)
+        ZERO_BYTES32  = b"\x00" * 32
 
         CTF_ABI = [
             {
@@ -485,13 +486,56 @@ def redeem_position(token_id: str, title: str,
                 "type": "function",
                 "stateMutability": "view",
             },
+            {
+                "inputs": [
+                    {"name": "parentCollectionId", "type": "bytes32"},
+                    {"name": "conditionId",        "type": "bytes32"},
+                    {"name": "indexSet",           "type": "uint256"},
+                ],
+                "name": "getCollectionId",
+                "outputs": [{"name": "", "type": "bytes32"}],
+                "type": "function",
+                "stateMutability": "view",
+            },
+            {
+                "inputs": [
+                    {"name": "collateralToken", "type": "address"},
+                    {"name": "collectionId",   "type": "bytes32"},
+                ],
+                "name": "getPositionId",
+                "outputs": [{"name": "", "type": "uint256"}],
+                "type": "function",
+                "stateMutability": "pure",
+            },
         ]
 
-        ctf       = w3.eth.contract(address=CTF_ADDRESS, abi=CTF_ABI)
-        cid_bytes = bytes.fromhex(condition_id.replace("0x", ""))
-
-        # Capturar balance antes del canje para poder comparar después
+        ctf           = w3.eth.contract(address=CTF_ADDRESS, abi=CTF_ABI)
+        cid_bytes     = bytes.fromhex(condition_id.replace("0x", ""))
         token_id_int  = int(token_id)
+
+        # ── Determinar el colateral correcto (pUSD para mercados V2, USDC.e para V1) ──
+        # Usamos getCollectionId + getPositionId del propio contrato CTF para evitar
+        # gastar gas con el colateral equivocado (redeemPositions no revierte con
+        # colateral incorrecto — simplemente canjea 0 tokens y tiene éxito en silencio).
+        collateral = PUSD_ADDRESS  # default
+        try:
+            collection_id = ctf.functions.getCollectionId(
+                ZERO_BYTES32, cid_bytes, index_set
+            ).call()
+            pos_id_pusd  = ctf.functions.getPositionId(PUSD_ADDRESS,  collection_id).call()
+            pos_id_usdce = ctf.functions.getPositionId(USDCE_ADDRESS, collection_id).call()
+            if pos_id_pusd == token_id_int:
+                collateral = PUSD_ADDRESS
+                log("[redeem] Colateral detectado: pUSD")
+            elif pos_id_usdce == token_id_int:
+                collateral = USDCE_ADDRESS
+                log("[redeem] Colateral detectado: USDC.e")
+            else:
+                log("[redeem] ⚠ No se pudo detectar el colateral — usando pUSD por defecto")
+        except Exception as e:
+            log(f"[redeem] ⚠ Error detectando colateral ({e}) — usando pUSD por defecto")
+
+        # Capturar balance antes del canje para verificar que realmente se quemó
         balance_before = 0
         try:
             balance_before = ctf.functions.balanceOf(acct.address, token_id_int).call()
@@ -499,7 +543,7 @@ def redeem_position(token_id: str, title: str,
             pass
 
         tx = ctf.functions.redeemPositions(
-            USDC_ADDRESS, ZERO_BYTES32, cid_bytes, [index_set]
+            collateral, ZERO_BYTES32, cid_bytes, [index_set]
         ).build_transaction({
             "from":     acct.address,
             "nonce":    w3.eth.get_transaction_count(acct.address, "pending"),
