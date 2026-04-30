@@ -277,6 +277,10 @@ def process_copy_activity(profile: dict, activity: list):
             else:
                 record["status"] = "failed"
                 record["reason"] = msg
+                # Limpiar el tracking aunque la venta falle (posición ya vendida
+                # manualmente, sin liquidez, etc.) para que una re-compra posterior
+                # del perfil se pueda seguir sin quedar bloqueada por el check de duplicado.
+                _delete_copy_position(token_id)
                 log(f"[copy] SELL FAIL @{profile['username']} | {title[:35]} → {msg}")
 
             _insert_copy_trade(record)
@@ -315,6 +319,9 @@ def process_copy_activity(profile: dict, activity: list):
                     "profile":   profile["username"],
                     "bought_at": buy_ts,
                 })
+                # Si el token estaba marcado como vendido (venta previa), limpiarlo
+                # para que el sell-bot vuelva a gestionar esta nueva posición.
+                state["sold_tokens"].discard(token_id)
                 threading.Thread(
                     target=_seed_avg_price_from_fill,
                     args=(token_id, our_amount, buy_ts),
