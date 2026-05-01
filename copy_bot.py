@@ -175,35 +175,64 @@ def execute_copy_trade(token_id: str, amount_usdc: float) -> tuple[bool, str]:
         return False, str(e)
 
 
-def execute_copy_sell(token_id: str, title: str, profile_username: str) -> tuple[bool, str]:
-    """Vende nuestra posición en copy para un token dado. Devuelve (success, message)."""
-    address  = state["credentials"].get("address", "").strip()
-    our_size = 0.0
+def _get_our_position_size(token_id: str) -> float:
+    """Devuelve el tamaño actual de nuestra posición en shares para un token.
 
-    if address:
-        try:
+    Consulta primero el cache en memoria (ya paginado por bot_loop) y,
+    si no lo encuentra, hace una llamada paginada a la Data API como fallback.
+    """
+    # 1. Cache en memoria — siempre paginado, sin coste de red
+    for pos in state.get("positions", []):
+        if pos.get("token_id") == token_id:
+            return float(pos.get("size") or 0)
+
+    # 2. Fallback: llamada paginada a la Data API (cubre el caso en que el bot
+    #    no esté corriendo y state["positions"] esté vacío)
+    address = state["credentials"].get("address", "").strip()
+    if not address:
+        return 0.0
+    offset, limit = 0, 100
+    try:
+        while True:
             resp = requests.get(
                 f"{DATA_HOST}/positions",
-                params={"user": address.lower()},
+                params={"user": address.lower(), "limit": limit, "offset": offset},
                 timeout=10,
             )
-            if resp.status_code == 200:
-                positions = resp.json()
-                if isinstance(positions, list):
-                    for pos in positions:
-                        pos_token = (pos.get("asset") or pos.get("tokenId") or
-                                     pos.get("token_id") or "")
-                        if pos_token == token_id:
-                            our_size = float(pos.get("size") or 0)
-                            break
-        except Exception:
-            pass
+            if resp.status_code != 200:
+                break
+            page = resp.json()
+            if not isinstance(page, list):
+                page = page.get("positions", [])
+            for pos in page:
+                pos_token = (pos.get("asset") or pos.get("tokenId") or
+                             pos.get("token_id") or "")
+                if pos_token == token_id:
+                    return float(pos.get("size") or 0)
+            if len(page) < limit:
+                break
+            offset += limit
+    except Exception:
+        pass
+    return 0.0
+
+
+def execute_copy_sell(token_id: str, title: str, profile_username: str) -> tuple[bool, str]:
+    """Vende nuestra posición en copy para un token dado. Devuelve (success, message)."""
+    our_size = _get_our_position_size(token_id)
 
     if our_size <= 0.01:
         return False, "No tenemos posición en este token"
 
     sell_ts = time.time()
     ok, msg = sell_position(token_id, our_size)
+
+    # Reintento único si el FOK se canceló por falta de liquidez puntual
+    if not ok and "fok" in msg.lower():
+        log(f"[copy] SELL reintentando en 2 s — {title[:35]}")
+        time.sleep(2)
+        ok, msg = sell_position(token_id, our_size)
+
     if ok:
         _delete_copy_position(token_id)
         fill = fetch_fill_price(token_id, sell_ts) or get_best_bid(token_id)
