@@ -168,8 +168,18 @@ def execute_copy_trade(token_id: str, amount_usdc: float) -> tuple[bool, str]:
         resp      = client.post_order(signed, OrderType.FOK)
         resp_dict = resp if isinstance(resp, dict) else (resp.__dict__ if hasattr(resp, "__dict__") else {})
         status    = str(resp_dict.get("status", "")).lower()
+
+        # Loguear siempre la respuesta completa del CLOB para diagnóstico
+        log(f"[order] status={status!r} resp={str(resp_dict)[:300]}")
+
         if status in ("cancelled", "canceled", "unmatched"):
             return False, f"Orden FOK no ejecutada — sin liquidez (estado: {status})"
+
+        # Exigir status "matched" explícito. Cualquier otro valor (vacío, desconocido)
+        # se trata como fallo para evitar falsos positivos.
+        if status != "matched":
+            return False, f"Estado inesperado del CLOB: {status!r} — orden no confirmada"
+
         return True, str(resp)
     except Exception as e:
         return False, str(e)
