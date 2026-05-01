@@ -202,23 +202,37 @@ class TestHide:
 
 class TestStats:
     def test_returns_expected_structure(self, auth_client, monkeypatch):
-        monkeypatch.setattr("app._get_cached_balance", lambda: 100.0)
+        monkeypatch.setattr("app._get_cached_balance",
+                            lambda: {"pusd": 80.0, "usdce": 20.0, "total": 100.0})
         c, _ = auth_client
 
         resp = c.get("/api/stats")
         data = resp.get_json()
 
         assert resp.status_code == 200
-        for key in ("balance", "open_value", "open_cost", "total",
+        for key in ("balance", "balance_pusd", "balance_usdce",
+                    "open_value", "open_cost", "total",
                     "daily", "weekly", "monthly", "all_time"):
             assert key in data, f"Falta campo: {key}"
 
     def test_balance_comes_from_wallet(self, auth_client, monkeypatch):
-        monkeypatch.setattr("app._get_cached_balance", lambda: 42.5)
+        monkeypatch.setattr("app._get_cached_balance",
+                            lambda: {"pusd": 42.5, "usdce": 0.0, "total": 42.5})
         c, _ = auth_client
 
         resp = c.get("/api/stats")
         assert resp.get_json()["balance"] == pytest.approx(42.5)
+
+    def test_balance_breakdown_in_response(self, auth_client, monkeypatch):
+        monkeypatch.setattr("app._get_cached_balance",
+                            lambda: {"pusd": 29.59, "usdce": 2.50, "total": 32.09})
+        c, _ = auth_client
+
+        resp = c.get("/api/stats")
+        data = resp.get_json()
+        assert data["balance"]       == pytest.approx(32.09)
+        assert data["balance_pusd"]  == pytest.approx(29.59)
+        assert data["balance_usdce"] == pytest.approx(2.50)
 
 
 # ─── /api/sell ────────────────────────────────────────────────────────────────

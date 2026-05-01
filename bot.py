@@ -640,8 +640,12 @@ def _seed_avg_price_from_fill(token_id: str, amount_usdc: float, buy_ts: float) 
 
 # ─── Balance USDC on-chain ────────────────────────────────────────────────────
 
-def _fetch_usdc_balance() -> float:
-    """Devuelve el balance on-chain de USDC.e de la wallet configurada."""
+def _fetch_usdc_balance() -> dict:
+    """Devuelve el balance on-chain de pUSD y USDC.e de la wallet configurada.
+
+    Retorna {"pusd": float, "usdce": float, "total": float}.
+    """
+    result = {"pusd": 0.0, "usdce": 0.0, "total": 0.0}
     try:
         from eth_account import Account
         from web3 import Web3
@@ -650,20 +654,23 @@ def _fetch_usdc_balance() -> float:
         pk      = state["credentials"].get("private_key", "")
         address = state["credentials"].get("address", "")
         if not pk:
-            return 0.0
+            return result
         w3 = Web3(Web3.HTTPProvider("https://polygon-bor-rpc.publicnode.com"))
         w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
         if not address:
             address = Account.from_key(pk).address
-        addr = Web3.to_checksum_address(address)
-        USDC = Web3.to_checksum_address("0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB")  # pUSD (V2)
-        abi  = [{"inputs": [{"name": "account", "type": "address"}], "name": "balanceOf",
-                 "outputs": [{"name": "", "type": "uint256"}], "type": "function",
-                 "stateMutability": "view"}]
-        return w3.eth.contract(address=USDC, abi=abi).functions.balanceOf(addr).call() / 1_000_000
+        addr  = Web3.to_checksum_address(address)
+        PUSD  = Web3.to_checksum_address("0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB")
+        USDCE = Web3.to_checksum_address("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174")
+        abi   = [{"inputs": [{"name": "account", "type": "address"}], "name": "balanceOf",
+                  "outputs": [{"name": "", "type": "uint256"}], "type": "function",
+                  "stateMutability": "view"}]
+        pusd  = w3.eth.contract(address=PUSD,  abi=abi).functions.balanceOf(addr).call() / 1_000_000
+        usdce = w3.eth.contract(address=USDCE, abi=abi).functions.balanceOf(addr).call() / 1_000_000
+        result = {"pusd": pusd, "usdce": usdce, "total": pusd + usdce}
     except Exception as e:
-        log(f"[balance] Error consultando USDC on-chain: {e}")
-        return 0.0
+        log(f"[balance] Error consultando balance on-chain: {e}")
+    return result
 
 
 # ─── Loop principal ───────────────────────────────────────────────────────────

@@ -68,17 +68,18 @@ from state import DATA_HOST, SLIPPAGE_WARN, TAKER_FEE, log, setup_file_logging, 
 
 # ─── Balance cache ────────────────────────────────────────────────────────────
 
-_balance_cache: dict = {"value": 0.0, "ts": 0.0}
+_balance_cache: dict = {"pusd": 0.0, "usdce": 0.0, "total": 0.0, "ts": 0.0}
 _BALANCE_TTL = 30.0  # segundos entre consultas on-chain
 
 
-def _get_cached_balance() -> float:
+def _get_cached_balance() -> dict:
+    """Devuelve {"pusd", "usdce", "total"}, refrescando cada 30 s."""
     now = time.time()
     if now - _balance_cache["ts"] > _BALANCE_TTL:
-        val = _fetch_usdc_balance()
-        _balance_cache["value"] = val
+        data = _fetch_usdc_balance()
+        _balance_cache.update(data)
         _balance_cache["ts"] = now
-    return _balance_cache["value"]
+    return {k: _balance_cache[k] for k in ("pusd", "usdce", "total")}
 
 
 # ─── Aplicación Flask ─────────────────────────────────────────────────────────
@@ -500,27 +501,31 @@ def api_sell():
 
 @app.route("/api/session", methods=["GET"])
 def api_session():
+    bal = _get_cached_balance()
     return jsonify({
-        "balance": round(_get_cached_balance(), 2),
+        "balance": round(bal["total"], 2),
         **_pnl_for_period("date(ts) = date('now')"),
     })
 
 
 @app.route("/api/stats", methods=["GET"])
 def api_stats():
-    balance        = _get_cached_balance()
+    bal            = _get_cached_balance()
+    balance        = bal["total"]
     open_positions = [p for p in state.get("positions", []) if not p.get("sold")]
     open_value     = sum(p.get("value", 0) or 0 for p in open_positions)
     open_cost      = sum(p.get("cost",  0) or 0 for p in open_positions)
     return jsonify({
-        "balance":    round(balance, 2),
-        "open_value": round(open_value, 2),
-        "open_cost":  round(open_cost, 2),
-        "total":      round(balance + open_value, 2),
-        "daily":      _pnl_for_period("date(ts) = date('now')"),
-        "weekly":     _pnl_for_period("ts >= date('now', '-6 days')"),
-        "monthly":    _pnl_for_period("strftime('%Y-%m', ts) = strftime('%Y-%m', 'now')"),
-        "all_time":   _pnl_for_period(""),
+        "balance":       round(balance, 2),
+        "balance_pusd":  round(bal["pusd"],  2),
+        "balance_usdce": round(bal["usdce"], 2),
+        "open_value":    round(open_value, 2),
+        "open_cost":     round(open_cost, 2),
+        "total":         round(balance + open_value, 2),
+        "daily":         _pnl_for_period("date(ts) = date('now')"),
+        "weekly":        _pnl_for_period("ts >= date('now', '-6 days')"),
+        "monthly":       _pnl_for_period("strftime('%Y-%m', ts) = strftime('%Y-%m', 'now')"),
+        "all_time":      _pnl_for_period(""),
     })
 
 
