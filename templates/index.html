@@ -360,7 +360,7 @@
       <span class="hl">Portfolio</span>
       <span class="hv" id="statTotal">—</span>
     </div>
-    <div class="hstat" title="USDC disponible en tu wallet">
+    <div class="hstat" id="pill-balance" title="Liquidez total en tu wallet">
       <span class="hl">Balance</span>
       <span class="hv" id="statBalance">—</span>
     </div>
@@ -1731,6 +1731,18 @@ async function loadSessionStats() {
 
     document.getElementById('statBalance').textContent = '$' + (d.balance ?? 0).toFixed(2);
     document.getElementById('statTotal').textContent   = '$' + (d.total ?? 0).toFixed(2);
+
+    // Tooltip con desglose de balance por token
+    const pusd  = d.balance_pusd  ?? 0;
+    const usdce = d.balance_usdce ?? 0;
+    let balTitle = 'Liquidez total en tu wallet';
+    if (pusd > 0 || usdce > 0) {
+      const parts = [];
+      if (pusd  > 0) parts.push(`pUSD: $${pusd.toFixed(2)}`);
+      if (usdce > 0) parts.push(`USDC.e: $${usdce.toFixed(2)}`);
+      balTitle = parts.join(' | ');
+    }
+    document.getElementById('pill-balance').title = balTitle;
 
     const openCost   = d.open_cost ?? 0;
     const openVal    = d.open_value ?? 0;
