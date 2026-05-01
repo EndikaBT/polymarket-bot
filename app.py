@@ -10,8 +10,11 @@ Toda la lógica de negocio vive en los módulos especializados:
 """
 
 import atexit
+import os
 import secrets
 import signal
+import subprocess
+import sys
 import threading
 import time
 from datetime import datetime, timedelta
@@ -548,6 +551,21 @@ def api_bot_start():
 def api_bot_stop():
     state["bot_running"] = False
     return jsonify({"running": False})
+
+
+@app.route("/api/restart", methods=["POST"])
+def api_restart():
+    """Reinicia el proceso de la aplicación en segundo plano."""
+    def _do_restart():
+        time.sleep(0.6)  # Dar tiempo a que la respuesta HTTP llegue al cliente
+        kwargs = {}
+        if os.name == "nt":
+            kwargs["creationflags"] = subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW
+        subprocess.Popen([sys.executable] + sys.argv, **kwargs)
+        os._exit(0)
+
+    threading.Thread(target=_do_restart, daemon=True).start()
+    return jsonify({"ok": True})
 
 
 @app.route("/api/bot/status", methods=["GET"])
