@@ -29,7 +29,7 @@ from db import (
     get_remaining_budget,
     save_config,
 )
-from state import DATA_HOST, SCRAPE_HEADERS, log, state
+from state import DATA_HOST, SCRAPE_HEADERS, _logger, log, state
 
 # ─── Resolución de perfiles ───────────────────────────────────────────────────
 
@@ -259,7 +259,15 @@ def process_copy_activity(profile: dict, activity: list):
 
     new_trades = []
     for item in activity:
-        if item.get("type") != "TRADE":
+        item_type = (item.get("type") or "").upper()
+        if item_type != "TRADE":
+            # Loguear tipos desconocidos para poder diagnosticar mercados especiales
+            # (neg risk, merge, etc.) — sólo si son ítems más nuevos que last_seen
+            item_id_pre = str(item.get("id") or item.get("transactionHash") or "")
+            if item_id_pre and item_id_pre != last_seen and last_seen is not None:
+                asset = item.get("asset") or item.get("tokenId") or ""
+                log(f"[copy] SKIP tipo={item_type!r} @{profile['username']} "
+                    f"asset={asset[:20]} — no es TRADE")
             continue
         item_id = str(item.get("id") or item.get("transactionHash") or "")
         if not item_id:
@@ -284,7 +292,11 @@ def process_copy_activity(profile: dict, activity: list):
         side     = (item.get("side") or "BUY").upper()
         token_id = item.get("asset") or item.get("tokenId") or ""
         if not token_id:
+            log(f"[copy] SKIP @{profile['username']} — sin token_id: {str(item)[:200]}")
             continue
+
+        # Log del ítem crudo para facilitar diagnóstico
+        _logger.info("[copy] RAW item @%s: %s", profile['username'], str(item)[:400])
 
         title      = str(item.get("title") or item.get("question") or item.get("market") or "?")
         price      = float(item.get("price") or 0)

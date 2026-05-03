@@ -20,7 +20,7 @@ import time
 from datetime import datetime, timedelta
 
 import requests
-from flask import Flask, jsonify, redirect, render_template, request, session, url_for
+from flask import Flask, jsonify, redirect, render_template, request, send_file, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
 
 import notifier
@@ -48,6 +48,7 @@ from bot import (
 from copy_bot import (
     copy_trade_loop,
     get_portfolio_value,
+    get_user_activity,
     resolve_profile_url,
 )
 from db import (
@@ -860,6 +861,61 @@ def api_copy_status():
         "daily_budget":     s.get("daily_budget", 20.0),
         "remaining_budget": round(get_remaining_budget(), 2),
     })
+
+
+# ─── Rutas API — Logs ────────────────────────────────────────────────────────
+
+@app.route("/api/logs/download", methods=["GET"])
+def api_logs_download():
+    """Descarga el archivo polymarket.log completo."""
+    log_path = os.path.abspath("polymarket.log")
+    if not os.path.exists(log_path):
+        return jsonify({"error": "No hay archivo de log todavía"}), 404
+    return send_file(log_path, as_attachment=True, download_name="polymarket.log",
+                     mimetype="text/plain")
+
+
+@app.route("/api/copy/probe", methods=["GET"])
+def api_copy_probe():
+    """Devuelve la actividad cruda de un perfil para depuración.
+
+    ?address=0x… ó ?username=foo   (si ya está en copy_profiles se resuelve solo)
+    ?limit=20 (por defecto)
+    """
+    address  = (request.args.get("address") or "").strip().lower()
+    username = (request.args.get("username") or "").strip()
+    limit    = min(int(request.args.get("limit", 20)), 100)
+
+    # Intentar resolver por username si se pasó
+    if not address and username:
+        for addr, prof in state["copy_profiles"].items():
+            if prof.get("username", "").lower() == username.lower():
+                address = addr
+                break
+
+    if not address:
+        return jsonify({"error": "Parámetro address o username requerido"}), 400
+
+    try:
+        items = get_user_activity(address, limit=limit)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    summary = []
+    for item in items:
+        summary.append({
+            "type":      item.get("type"),
+            "side":      item.get("side"),
+            "asset":     item.get("asset") or item.get("tokenId"),
+            "title":     item.get("title") or item.get("question") or item.get("market"),
+            "price":     item.get("price"),
+            "size":      item.get("size"),
+            "usdcSize":  item.get("usdcSize"),
+            "id":        item.get("id") or item.get("transactionHash"),
+            "_raw":      item,
+        })
+
+    return jsonify({"count": len(summary), "items": summary})
 
 
 # ─── Rutas Auth ───────────────────────────────────────────────────────────────

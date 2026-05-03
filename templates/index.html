@@ -830,11 +830,18 @@
 <div id="logBar">
   <div id="logBarHeader">
     <span><i class="bi bi-terminal me-1"></i>Registro de actividad</span>
-    <button class="btn btn-sm py-0 px-2" id="clearLogsBtn"
-            style="color:#6b7280;font-size:.72rem;border:1px solid #374151"
-            title="Limpiar log">
-      <i class="bi bi-trash"></i>
-    </button>
+    <div class="d-flex gap-1">
+      <a href="/api/logs/download" class="btn btn-sm py-0 px-2"
+         style="color:#6b7280;font-size:.72rem;border:1px solid #374151"
+         title="Descargar polymarket.log" download>
+        <i class="bi bi-download"></i>
+      </a>
+      <button class="btn btn-sm py-0 px-2" id="clearLogsBtn"
+              style="color:#6b7280;font-size:.72rem;border:1px solid #374151"
+              title="Limpiar log">
+        <i class="bi bi-trash"></i>
+      </button>
+    </div>
   </div>
   <div id="logPanel"></div>
 </div>
