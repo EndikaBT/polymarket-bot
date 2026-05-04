@@ -48,6 +48,7 @@ state: dict = {
         "fixed_amount": 1.0,
         "daily_budget": 20.0,
         "min_price_filter": 0.0,
+        "max_price_filter": 0.0,  # 0 = desactivado; ej. 0.90 = saltar si precio ≥ 90¢
     },
     "copy_running": False,
     "copy_thread": None,

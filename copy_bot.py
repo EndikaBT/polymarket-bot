@@ -350,13 +350,44 @@ def process_copy_activity(profile: dict, activity: list):
             record["reason"] = skip_reason
             log(f"[copy] SKIP @{profile['username']} | {title[:35]} ${their_usdc:.2f} → {skip_reason}")
         else:
+            their_price = float(item.get("price") or 0)
+            current_bid = get_best_bid(token_id)
+
+            log(f"[copy] PRE-BUY @{profile['username']} | {title[:35]} "
+                f"their={their_price:.4f} current={current_bid:.4f}")
+
+            # ── Precio mínimo ────────────────────────────────────────────────
             min_price = float(state["copy_settings"].get("min_price_filter") or 0)
-            if min_price > 0:
-                current_bid = get_best_bid(token_id)
-                if current_bid > 0 and current_bid < min_price:
+            if min_price > 0 and current_bid > 0 and current_bid < min_price:
+                record["status"] = "skipped"
+                record["reason"] = f"precio {current_bid:.2f} < mínimo {min_price:.2f}"
+                log(f"[copy] SKIP (precio bajo) @{profile['username']} | {title[:35]} "
+                    f"— {current_bid:.4f} < {min_price:.4f}")
+                _insert_copy_trade(record)
+                continue
+
+            # ── Precio máximo (mercados casi resueltos) ──────────────────────
+            max_price = float(state["copy_settings"].get("max_price_filter") or 0)
+            if max_price > 0 and current_bid > 0 and current_bid >= max_price:
+                record["status"] = "skipped"
+                record["reason"] = f"precio {current_bid:.2f} ≥ máximo {max_price:.2f} (mercado casi resuelto)"
+                log(f"[copy] SKIP (precio alto) @{profile['username']} | {title[:35]} "
+                    f"— {current_bid:.4f} ≥ {max_price:.4f}")
+                _insert_copy_trade(record)
+                continue
+
+            # ── Divergencia extrema de precio ────────────────────────────────
+            # Si el precio actual es ≥10× el precio de la actividad, el mercado
+            # ha cambiado drásticamente desde la compra copiada (probable mercado
+            # ya resuelto o token complementario incorrecto). Saltar siempre.
+            if their_price > 0 and current_bid > 0:
+                ratio = current_bid / their_price
+                if ratio >= 10:
+                    reason = (f"divergencia de precio extrema: pagaron {their_price:.4f}, "
+                              f"actual {current_bid:.4f} (×{ratio:.0f}) — mercado posiblemente resuelto")
                     record["status"] = "skipped"
-                    record["reason"] = f"precio {current_bid:.2f} < mínimo {min_price:.2f}"
-                    log(f"[copy] SKIP (precio bajo) @{profile['username']} | {title[:35]} — {current_bid:.2f} < {min_price:.2f}")
+                    record["reason"] = reason
+                    log(f"[copy] SKIP (divergencia) @{profile['username']} | {title[:35]} — {reason}")
                     _insert_copy_trade(record)
                     continue
 
