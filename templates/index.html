@@ -932,6 +932,10 @@ function shortTitle(t) {
 function escHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
+// Para usar dentro de strings JS en atributos onclick: escapa \ y '
+function jsStr(s) {
+  return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/\r?\n/g,' ');
+}
 
 // ── Log panel ─────────────────────────────────────────────────────────────
 function appendLogs(entries) {
@@ -1039,18 +1043,18 @@ function renderPositions(list) {
       actionHTML = '<span class="badge" style="background:rgba(34,197,94,.15);color:var(--green)"><i class="bi bi-check-circle-fill"></i> Vendido</span>';
     } else if (p.redeemable) {
       actionHTML = `<button class="btn btn-sm btn-outline-warning py-0 px-2"
-          onclick="redeemPosition('${escHtml(p.token_id)}','${escHtml(p.title)}','${p.condition_id||''}',${p.outcome_index??-1})">
+          onclick="redeemPosition('${escHtml(p.token_id)}','${jsStr(p.title)}','${p.condition_id||''}',${p.outcome_index??-1})">
           <i class="bi bi-gift-fill"></i> Canjear
         </button>`;
     } else {
       actionHTML = `
         <button class="btn btn-sm btn-outline-danger py-0 px-2" ${p.sold ? 'disabled' : ''}
-            onclick="openSellModal('${escHtml(p.token_id)}','${escHtml(p.title)}',${p.size},${p.current_price},${p.cost},${p.net_profit})">
+            onclick="openSellModal('${escHtml(p.token_id)}','${jsStr(p.title)}',${p.size},${p.current_price},${p.cost},${p.net_profit})">
           <i class="bi bi-cash-coin"></i> Vender
         </button>`;
     }
     const hideBtn = `<button class="btn btn-sm btn-outline-secondary py-0 px-1 ms-1" title="Ocultar esta posición"
-      onclick="hidePosition('${escHtml(p.token_id)}','${escHtml(p.title)}','${escHtml(p.outcome)}',${p.size},${p.avg_price ?? 0})">
+      onclick="hidePosition('${escHtml(p.token_id)}','${jsStr(p.title)}','${jsStr(p.outcome)}',${p.size},${p.avg_price ?? 0})">
       <i class="bi bi-eye-slash"></i></button>`;
 
     const netProfitTip = p.cost != null
@@ -1070,7 +1074,7 @@ function renderPositions(list) {
           </span>
           <button class="btn btn-link p-0 ms-1 text-secondary" style="font-size:.65rem;line-height:1;vertical-align:middle"
             title="Corregir precio de compra"
-            onclick="openAvgPriceModal('${escHtml(p.token_id)}','${escHtml(p.title)}',${p.avg_price ?? 0},${p.size})">
+            onclick="openAvgPriceModal('${escHtml(p.token_id)}','${jsStr(p.title)}',${p.avg_price ?? 0},${p.size})">
             <i class="bi bi-pencil-fill"></i>
           </button>
         </span>

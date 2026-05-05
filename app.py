@@ -487,7 +487,10 @@ def api_sell():
                 "diff_pct":    drop_pct,
             })
 
-    ref_price = fresh if fresh > 0 else price_f
+    # Usar siempre el precio fresco del CLOB como referencia para el floor.
+    # Si el CLOB no devuelve precio (fresh=0), vendemos sin floor para evitar
+    # que un precio estático de la UI bloquee la venta con un floor incorrecto.
+    ref_price = fresh  # puede ser 0 → sell_position usará floor=0 (sin restricción)
     pos       = next((p for p in state["positions"] if p["token_id"] == token_id), {})
     sell_ts   = time.time()
     ok, msg   = sell_position(token_id, size_f, ref_price if ref_price > 0 else None,
