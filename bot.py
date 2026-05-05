@@ -408,12 +408,19 @@ def sell_position(token_id: str, size: float, price: float | None = None,
         resp_dict = resp if isinstance(resp, dict) else (resp.__dict__ if hasattr(resp, "__dict__") else {})
         status    = str(resp_dict.get("status", "")).lower()
 
+        log(f"[sell] status={status!r} resp={str(resp_dict)[:200]}")
+
         if status in ("cancelled", "canceled", "unmatched"):
             msg = f"Orden FOK cancelada — sin liquidez o precio mínimo no alcanzado (estado: {status})"
             log(f"[sell] {msg} — token: {token_id[:20]}…")
             return False, msg
 
-        log(f"SELL ejecutado — token: {token_id[:20]}… size: {size} floor={floor} → {resp}")
+        if status != "matched":
+            msg = f"Estado inesperado del CLOB: {status!r} — venta no confirmada"
+            log(f"[sell] {msg} — token: {token_id[:20]}…")
+            return False, msg
+
+        log(f"[sell] OK — token: {token_id[:20]}… size: {size} floor={floor}")
         state["sold_tokens"].add(token_id)
         return True, str(resp)
     except Exception as e:
