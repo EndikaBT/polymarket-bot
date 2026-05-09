@@ -648,6 +648,7 @@ def api_copy_get_settings():
         "daily_budget":     s.get("daily_budget", 20.0),
         "min_price_filter": s.get("min_price_filter", 0.0),
         "max_price_filter": s.get("max_price_filter", 0.0),
+        "max_repeat_buys":  s.get("max_repeat_buys", 0),
         "spent_today":      round(spent, 2),
         "remaining":        round(remaining, 2),
     })
@@ -682,6 +683,11 @@ def api_copy_update_settings():
         if v < 0 or v > 1:
             return jsonify({"ok": False, "error": "max_price_filter debe estar entre 0 y 1"}), 400
         s["max_price_filter"] = v
+    if "max_repeat_buys" in data:
+        v = int(data["max_repeat_buys"])
+        if v < 0:
+            return jsonify({"ok": False, "error": "max_repeat_buys debe ser ≥ 0"}), 400
+        s["max_repeat_buys"] = v
     save_config()
     return jsonify({"ok": True, "remaining": round(get_remaining_budget(), 2)})
 

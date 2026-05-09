@@ -535,7 +535,18 @@
               </div>
             </div>
             <div class="col-md-2">
-              <button class="btn btn-sm btn-accent w-100" onclick="saveCopySettings()">
+              <label class="form-label text-secondary small mb-1"
+                title="Máximo de veces que se puede comprar el mismo token para el mismo perfil. 0 = ilimitado. 1 = solo compra original, sin recompras.">
+                Recompras máx. ⓘ
+              </label>
+              <div class="input-group input-group-sm">
+                <input type="number" id="maxRepeatBuys" min="0" step="1"
+                  class="form-control bg-dark text-light border-secondary" value="0" placeholder="0 = ∞" />
+                <span class="input-group-text bg-dark text-secondary border-secondary">×</span>
+              </div>
+            </div>
+            <div class="col-md-2">
+              <button class="btn btn-sm btn-accent w-100" onclick="saveCopySettings()" style="margin-top:1.5rem">
                 <i class="bi bi-floppy"></i> Guardar
               </button>
             </div>
@@ -1603,6 +1614,7 @@ async function loadCopySettings() {
     document.getElementById('dailyBudget').value     = s.daily_budget ?? 20;
     document.getElementById('minPriceFilter').value  = s.min_price_filter ?? 0;
     document.getElementById('maxPriceFilter').value  = s.max_price_filter ?? 0;
+    document.getElementById('maxRepeatBuys').value   = s.max_repeat_buys ?? 0;
     document.getElementById('fixedAmountCol').style.display = s.mode === 'fixed' ? '' : 'none';
     updateBudgetDisplay(s.spent_today || 0, s.daily_budget || 50, s.remaining || 50);
   } catch {}
@@ -1619,13 +1631,15 @@ async function saveCopySettings() {
   const dailyBudget    = parseFloat(document.getElementById('dailyBudget').value);
   const minPriceFilter = parseFloat(document.getElementById('minPriceFilter').value) || 0;
   const maxPriceFilter = parseFloat(document.getElementById('maxPriceFilter').value) || 0;
+  const maxRepeatBuys  = parseInt(document.getElementById('maxRepeatBuys').value) || 0;
   const msg            = document.getElementById('settingsSaveMsg');
   try {
     const r = await fetch('/api/copy/settings', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ mode, fixed_amount: fixedAmount, daily_budget: dailyBudget,
-                             min_price_filter: minPriceFilter, max_price_filter: maxPriceFilter })
+                             min_price_filter: minPriceFilter, max_price_filter: maxPriceFilter,
+                             max_repeat_buys: maxRepeatBuys })
     });
     const d = await r.json();
     if (d.ok) {
