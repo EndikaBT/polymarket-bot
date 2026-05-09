@@ -347,7 +347,7 @@ def process_copy_activity(profile: dict, activity: list):
         if max_repeats > 0:
             count_key = f"{addr}:{token_id}"
             buy_count = state["copy_buy_counts"].get(count_key, 0)
-            if buy_count > max_repeats:
+            if buy_count >= max_repeats:
                 record["status"] = "skipped"
                 record["reason"] = f"límite de recompras alcanzado ({buy_count}/{max_repeats})"
                 log(f"[copy] SKIP (recompras) @{profile['username']} | {title[:35]} "

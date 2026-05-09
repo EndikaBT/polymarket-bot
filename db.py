@@ -119,7 +119,10 @@ def init_db():
 def _save_settings():
     """Persiste credenciales, profit_targets, copy_settings y copy_profiles en kv."""
     cs = state["copy_settings"]
-    settings_to_save = {k: cs[k] for k in ("mode", "fixed_amount", "daily_budget") if k in cs}
+    settings_to_save = {k: cs[k] for k in (
+        "mode", "fixed_amount", "daily_budget",
+        "min_price_filter", "max_price_filter", "max_repeat_buys",
+    ) if k in cs}
     with _db_lock:
         with _db_conn() as conn:
             conn.execute("INSERT OR REPLACE INTO kv VALUES ('credentials', ?)",
