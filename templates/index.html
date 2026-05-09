@@ -1064,11 +1064,18 @@ function renderPositions(list) {
           <i class="bi bi-gift-fill"></i> Canjear
         </button>`;
     } else {
+      const redeemBtn = !p.clob_price_reliable
+        ? `<button class="btn btn-sm btn-outline-warning py-0 px-1 ms-1"
+              title="El precio CLOB es 0 — puede que el mercado esté resuelto. Intenta canjear."
+              onclick="redeemPosition('${escHtml(p.token_id)}','${jsStr(p.title)}','${p.condition_id||''}',${p.outcome_index??-1})">
+              <i class="bi bi-gift-fill"></i>
+           </button>`
+        : '';
       actionHTML = `
-        <button class="btn btn-sm btn-outline-danger py-0 px-2" ${p.sold ? 'disabled' : ''}
+        <button class="btn btn-sm btn-outline-danger py-0 px-2"
             onclick="openSellModal('${escHtml(p.token_id)}','${jsStr(p.title)}',${p.size},${p.current_price},${p.cost},${p.net_profit})">
           <i class="bi bi-cash-coin"></i> Vender
-        </button>`;
+        </button>${redeemBtn}`;
     }
     const hideBtn = `<button class="btn btn-sm btn-outline-secondary py-0 px-1 ms-1" title="Ocultar esta posición"
       onclick="hidePosition('${escHtml(p.token_id)}','${jsStr(p.title)}','${jsStr(p.outcome)}',${p.size},${p.avg_price ?? 0})">
@@ -1096,7 +1103,11 @@ function renderPositions(list) {
           </button>
         </span>
       </td>
-      <td class="text-end">${fmtUsdc(p.value)}</td>
+      <td class="text-end">
+        ${fmtUsdc(p.value)}
+        ${!p.clob_price_reliable ? `<span class="ms-1 text-warning" style="font-size:.7rem"
+          title="Precio CLOB = 0. Se muestra el precio de la Data API, que puede ser incorrecto en mercados OVER/UNDER (devuelve el precio del token complementario). El precio real puede ser diferente — usa 'Vender a precio de mercado' o intenta Canjear.">⚠</span>` : ''}
+      </td>
       <td class="text-end">
         <span class="${pnlClass(p.net_profit)}" title="${netProfitTip}">
           ${p.net_profit != null ? (p.net_profit >= 0 ? '+' : '') + fmtUsdc(p.net_profit) : '—'}

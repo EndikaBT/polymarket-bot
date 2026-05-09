@@ -301,6 +301,12 @@ def enrich_positions(raw_positions: list) -> list:
             if bought_at_ts else None
         )
 
+        # clob_price_reliable: True si el precio viene del CLOB en vivo.
+        # False significa que se usa el fallback de la Data API, que puede
+        # ser incorrecto en mercados neg-risk (OVER/UNDER) porque a veces
+        # devuelve el precio del token complementario.
+        clob_price_reliable = live_price > 0
+
         result.append({
             "token_id":           token_id,
             "title":              title,
@@ -309,6 +315,8 @@ def enrich_positions(raw_positions: list) -> list:
             "avg_price":          round(avg_price, 4) if avg_price_reliable else None,
             "avg_price_reliable": avg_price_reliable,
             "current_price":      round(current, 4),
+            "clob_price":         round(live_price, 4),
+            "clob_price_reliable": clob_price_reliable,
             "value":              round(size * current, 2),
             "cost":               cost,
             "sell_value":         sell_value,
