@@ -175,9 +175,9 @@ def execute_copy_trade(token_id: str, amount_usdc: float) -> tuple[bool, str]:
         if status in ("cancelled", "canceled", "unmatched"):
             return False, f"Orden FOK no ejecutada — sin liquidez (estado: {status})"
 
-        # Exigir status "matched" explícito. Cualquier otro valor (vacío, desconocido)
-        # se trata como fallo para evitar falsos positivos.
-        if status != "matched":
+        # "matched" = ejecutada; "delayed" = aceptada con liquidación diferida (también éxito).
+        # Cualquier otro valor desconocido se trata como fallo para evitar falsos positivos.
+        if status not in ("matched", "delayed"):
             return False, f"Estado inesperado del CLOB: {status!r} — orden no confirmada"
 
         return True, str(resp)

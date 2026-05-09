@@ -415,12 +415,14 @@ def sell_position(token_id: str, size: float, price: float | None = None,
             log(f"[sell] {msg} — token: {token_id[:20]}…")
             return False, msg
 
-        if status != "matched":
+        # "matched" = ejecutada; "delayed" = aceptada con liquidación diferida (también éxito).
+        # Cualquier otro valor desconocido se trata como fallo.
+        if status not in ("matched", "delayed"):
             msg = f"Estado inesperado del CLOB: {status!r} — venta no confirmada"
             log(f"[sell] {msg} — token: {token_id[:20]}…")
             return False, msg
 
-        log(f"[sell] OK — token: {token_id[:20]}… size: {size} floor={floor}")
+        log(f"[sell] OK ({status}) — token: {token_id[:20]}… size: {size} floor={floor}")
         state["sold_tokens"].add(token_id)
         return True, str(resp)
     except Exception as e:
