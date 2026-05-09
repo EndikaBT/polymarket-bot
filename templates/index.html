@@ -825,11 +825,17 @@
         <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body" id="sellModalBody"></div>
-      <div class="modal-footer border-secondary">
-        <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal"
-          onclick="pendingSell=null">Cancelar</button>
-        <button type="button" class="btn btn-sm btn-danger" id="confirmSellBtn">
-          <i class="bi bi-check-lg"></i> Vender
+      <div class="modal-footer border-secondary flex-column align-items-stretch gap-2">
+        <div class="d-flex gap-2 w-100">
+          <button type="button" class="btn btn-sm btn-secondary flex-fill" data-bs-dismiss="modal"
+            onclick="pendingSell=null">Cancelar</button>
+          <button type="button" class="btn btn-sm btn-danger flex-fill" id="confirmSellBtn">
+            <i class="bi bi-check-lg"></i> Vender
+          </button>
+        </div>
+        <button type="button" class="btn btn-sm btn-outline-warning w-100" id="forceMarketSellBtn"
+          title="Ignora el precio de referencia y vende a lo que ofrezca el libro en este momento. Usar si el precio mostrado es incorrecto.">
+          <i class="bi bi-lightning-charge-fill me-1"></i>Vender a precio de mercado (sin límite)
         </button>
       </div>
     </div>
@@ -1429,26 +1435,33 @@ function showSlippageWarning(d) {
   confirmBtn.className = 'btn btn-sm btn-warning text-dark';
 }
 
+async function _doSell(forceMarket) {
+  if (!pendingSell) return;
+  const { tokenId, size, price, force } = pendingSell;
+  const body = { token_id: tokenId, size, price, force };
+  if (forceMarket) body.floor = 0;   // sin mínimo — vende a cualquier precio de libro
+
+  const r = await fetch('/api/sell', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body)
+  });
+  return r.json();
+}
+
 document.getElementById('confirmSellBtn').addEventListener('click', async () => {
   if (!pendingSell) return;
   const btn = document.getElementById('confirmSellBtn');
   btn.disabled = true;
   btn.innerHTML = '<span class="spin">⟳</span> Vendiendo…';
-
-  const { tokenId, size, price, force } = pendingSell;
   try {
-    const r = await fetch('/api/sell', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ token_id: tokenId, size, price, force })
-    });
-    const d = await r.json();
-
+    const d = await _doSell(false);
     if (d.slippage) {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="bi bi-check-lg"></i> Vender';
       showSlippageWarning(d);
       return;
     }
-
     sellModal.hide();
     pendingSell = null;
     if (d.ok) {
@@ -1457,6 +1470,29 @@ document.getElementById('confirmSellBtn').addEventListener('click', async () => 
     } else {
       showToast(`Venta fallida: ${d.error || 'desconocido'}`, 'error');
       appendLogs([`[manual] Error al vender: ${d.error || 'desconocido'}`]);
+    }
+  } catch (err) {
+    sellModal.hide();
+    pendingSell = null;
+    appendLogs([`[manual] Error de red: ${err}`]);
+  }
+});
+
+document.getElementById('forceMarketSellBtn').addEventListener('click', async () => {
+  if (!pendingSell) return;
+  const btn = document.getElementById('forceMarketSellBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin">⟳</span> Vendiendo…';
+  try {
+    const d = await _doSell(true);
+    sellModal.hide();
+    pendingSell = null;
+    if (d.ok) {
+      showToast('Orden de venta ejecutada (precio de mercado)', 'success');
+      setTimeout(loadPositions, 2000);
+    } else {
+      showToast(`Venta fallida: ${d.error || 'desconocido'}`, 'error');
+      appendLogs([`[manual] Error al vender a mercado: ${d.error || 'desconocido'}`]);
     }
   } catch (err) {
     sellModal.hide();
