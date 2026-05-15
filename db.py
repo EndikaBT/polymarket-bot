@@ -119,7 +119,10 @@ def init_db():
 def _save_settings():
     """Persiste credenciales, profit_targets, copy_settings y copy_profiles en kv."""
     cs = state["copy_settings"]
-    settings_to_save = {k: cs[k] for k in ("mode", "fixed_amount", "daily_budget") if k in cs}
+    settings_to_save = {k: cs[k] for k in (
+        "mode", "fixed_amount", "daily_budget",
+        "min_price_filter", "max_price_filter", "max_repeat_buys",
+    ) if k in cs}
     with _db_lock:
         with _db_conn() as conn:
             conn.execute("INSERT OR REPLACE INTO kv VALUES ('credentials', ?)",
@@ -132,6 +135,8 @@ def _save_settings():
                          (json.dumps(list(state["copy_profiles"].values())),))
             conn.execute("INSERT OR REPLACE INTO kv VALUES ('avg_price_overrides', ?)",
                          (json.dumps(state["avg_price_overrides"]),))
+            conn.execute("INSERT OR REPLACE INTO kv VALUES ('copy_buy_counts', ?)",
+                         (json.dumps(state["copy_buy_counts"]),))
 
 
 # Alias compatible con los ~15 call sites que usan save_config()
@@ -343,6 +348,7 @@ def load_from_db():
             state["avg_price_overrides"] = kv_get("avg_price_overrides", {})
             cs = kv_get("copy_settings", {})
             state["copy_settings"].update(cs)
+            state["copy_buy_counts"] = kv_get("copy_buy_counts", {})
             for p in kv_get("copy_profiles", []):
                 state["copy_profiles"][p["address"]] = p
 

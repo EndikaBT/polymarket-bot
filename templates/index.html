@@ -535,7 +535,18 @@
               </div>
             </div>
             <div class="col-md-2">
-              <button class="btn btn-sm btn-accent w-100" onclick="saveCopySettings()">
+              <label class="form-label text-secondary small mb-1"
+                title="Máximo de compras totales del mismo token por perfil. 0 = ilimitado. 1 = solo 1 compra (sin recompras). 2 = original + 1 recompra.">
+                Compras máx. ⓘ
+              </label>
+              <div class="input-group input-group-sm">
+                <input type="number" id="maxRepeatBuys" min="0" step="1"
+                  class="form-control bg-dark text-light border-secondary" value="0" placeholder="0 = ∞" />
+                <span class="input-group-text bg-dark text-secondary border-secondary">×</span>
+              </div>
+            </div>
+            <div class="col-md-2">
+              <button class="btn btn-sm btn-accent w-100" onclick="saveCopySettings()" style="margin-top:1.5rem">
                 <i class="bi bi-floppy"></i> Guardar
               </button>
             </div>
@@ -814,11 +825,17 @@
         <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body" id="sellModalBody"></div>
-      <div class="modal-footer border-secondary">
-        <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal"
-          onclick="pendingSell=null">Cancelar</button>
-        <button type="button" class="btn btn-sm btn-danger" id="confirmSellBtn">
-          <i class="bi bi-check-lg"></i> Vender
+      <div class="modal-footer border-secondary flex-column align-items-stretch gap-2">
+        <div class="d-flex gap-2 w-100">
+          <button type="button" class="btn btn-sm btn-secondary flex-fill" data-bs-dismiss="modal"
+            onclick="pendingSell=null">Cancelar</button>
+          <button type="button" class="btn btn-sm btn-danger flex-fill" id="confirmSellBtn">
+            <i class="bi bi-check-lg"></i> Vender
+          </button>
+        </div>
+        <button type="button" class="btn btn-sm btn-outline-warning w-100" id="forceMarketSellBtn"
+          title="Ignora el precio de referencia y vende a lo que ofrezca el libro en este momento. Usar si el precio mostrado es incorrecto.">
+          <i class="bi bi-lightning-charge-fill me-1"></i>Vender a precio de mercado (sin límite)
         </button>
       </div>
     </div>
@@ -1047,11 +1064,18 @@ function renderPositions(list) {
           <i class="bi bi-gift-fill"></i> Canjear
         </button>`;
     } else {
+      const redeemBtn = !p.clob_price_reliable
+        ? `<button class="btn btn-sm btn-outline-warning py-0 px-1 ms-1"
+              title="El precio CLOB es 0 — puede que el mercado esté resuelto. Intenta canjear."
+              onclick="redeemPosition('${escHtml(p.token_id)}','${jsStr(p.title)}','${p.condition_id||''}',${p.outcome_index??-1})">
+              <i class="bi bi-gift-fill"></i>
+           </button>`
+        : '';
       actionHTML = `
-        <button class="btn btn-sm btn-outline-danger py-0 px-2" ${p.sold ? 'disabled' : ''}
+        <button class="btn btn-sm btn-outline-danger py-0 px-2"
             onclick="openSellModal('${escHtml(p.token_id)}','${jsStr(p.title)}',${p.size},${p.current_price},${p.cost},${p.net_profit})">
           <i class="bi bi-cash-coin"></i> Vender
-        </button>`;
+        </button>${redeemBtn}`;
     }
     const hideBtn = `<button class="btn btn-sm btn-outline-secondary py-0 px-1 ms-1" title="Ocultar esta posición"
       onclick="hidePosition('${escHtml(p.token_id)}','${jsStr(p.title)}','${jsStr(p.outcome)}',${p.size},${p.avg_price ?? 0})">
@@ -1079,7 +1103,11 @@ function renderPositions(list) {
           </button>
         </span>
       </td>
-      <td class="text-end">${fmtUsdc(p.value)}</td>
+      <td class="text-end">
+        ${fmtUsdc(p.value)}
+        ${!p.clob_price_reliable ? `<span class="ms-1 text-warning" style="font-size:.7rem"
+          title="Precio CLOB = 0. Se muestra el precio de la Data API, que puede ser incorrecto en mercados OVER/UNDER (devuelve el precio del token complementario). El precio real puede ser diferente — usa 'Vender a precio de mercado' o intenta Canjear.">⚠</span>` : ''}
+      </td>
       <td class="text-end">
         <span class="${pnlClass(p.net_profit)}" title="${netProfitTip}">
           ${p.net_profit != null ? (p.net_profit >= 0 ? '+' : '') + fmtUsdc(p.net_profit) : '—'}
@@ -1418,26 +1446,33 @@ function showSlippageWarning(d) {
   confirmBtn.className = 'btn btn-sm btn-warning text-dark';
 }
 
+async function _doSell(forceMarket) {
+  if (!pendingSell) return;
+  const { tokenId, size, price, force } = pendingSell;
+  const body = { token_id: tokenId, size, price, force };
+  if (forceMarket) body.floor = 0;   // sin mínimo — vende a cualquier precio de libro
+
+  const r = await fetch('/api/sell', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body)
+  });
+  return r.json();
+}
+
 document.getElementById('confirmSellBtn').addEventListener('click', async () => {
   if (!pendingSell) return;
   const btn = document.getElementById('confirmSellBtn');
   btn.disabled = true;
   btn.innerHTML = '<span class="spin">⟳</span> Vendiendo…';
-
-  const { tokenId, size, price, force } = pendingSell;
   try {
-    const r = await fetch('/api/sell', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ token_id: tokenId, size, price, force })
-    });
-    const d = await r.json();
-
+    const d = await _doSell(false);
     if (d.slippage) {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="bi bi-check-lg"></i> Vender';
       showSlippageWarning(d);
       return;
     }
-
     sellModal.hide();
     pendingSell = null;
     if (d.ok) {
@@ -1446,6 +1481,29 @@ document.getElementById('confirmSellBtn').addEventListener('click', async () => 
     } else {
       showToast(`Venta fallida: ${d.error || 'desconocido'}`, 'error');
       appendLogs([`[manual] Error al vender: ${d.error || 'desconocido'}`]);
+    }
+  } catch (err) {
+    sellModal.hide();
+    pendingSell = null;
+    appendLogs([`[manual] Error de red: ${err}`]);
+  }
+});
+
+document.getElementById('forceMarketSellBtn').addEventListener('click', async () => {
+  if (!pendingSell) return;
+  const btn = document.getElementById('forceMarketSellBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin">⟳</span> Vendiendo…';
+  try {
+    const d = await _doSell(true);
+    sellModal.hide();
+    pendingSell = null;
+    if (d.ok) {
+      showToast('Orden de venta ejecutada (precio de mercado)', 'success');
+      setTimeout(loadPositions, 2000);
+    } else {
+      showToast(`Venta fallida: ${d.error || 'desconocido'}`, 'error');
+      appendLogs([`[manual] Error al vender a mercado: ${d.error || 'desconocido'}`]);
     }
   } catch (err) {
     sellModal.hide();
@@ -1603,6 +1661,7 @@ async function loadCopySettings() {
     document.getElementById('dailyBudget').value     = s.daily_budget ?? 20;
     document.getElementById('minPriceFilter').value  = s.min_price_filter ?? 0;
     document.getElementById('maxPriceFilter').value  = s.max_price_filter ?? 0;
+    document.getElementById('maxRepeatBuys').value   = s.max_repeat_buys ?? 0;
     document.getElementById('fixedAmountCol').style.display = s.mode === 'fixed' ? '' : 'none';
     updateBudgetDisplay(s.spent_today || 0, s.daily_budget || 50, s.remaining || 50);
   } catch {}
@@ -1619,13 +1678,15 @@ async function saveCopySettings() {
   const dailyBudget    = parseFloat(document.getElementById('dailyBudget').value);
   const minPriceFilter = parseFloat(document.getElementById('minPriceFilter').value) || 0;
   const maxPriceFilter = parseFloat(document.getElementById('maxPriceFilter').value) || 0;
+  const maxRepeatBuys  = parseInt(document.getElementById('maxRepeatBuys').value) || 0;
   const msg            = document.getElementById('settingsSaveMsg');
   try {
     const r = await fetch('/api/copy/settings', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ mode, fixed_amount: fixedAmount, daily_budget: dailyBudget,
-                             min_price_filter: minPriceFilter, max_price_filter: maxPriceFilter })
+                             min_price_filter: minPriceFilter, max_price_filter: maxPriceFilter,
+                             max_repeat_buys: maxRepeatBuys })
     });
     const d = await r.json();
     if (d.ok) {

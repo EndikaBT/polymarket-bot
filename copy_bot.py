@@ -175,9 +175,9 @@ def execute_copy_trade(token_id: str, amount_usdc: float) -> tuple[bool, str]:
         if status in ("cancelled", "canceled", "unmatched"):
             return False, f"Orden FOK no ejecutada — sin liquidez (estado: {status})"
 
-        # Exigir status "matched" explícito. Cualquier otro valor (vacío, desconocido)
-        # se trata como fallo para evitar falsos positivos.
-        if status != "matched":
+        # "matched" = ejecutada; "delayed" = aceptada con liquidación diferida (también éxito).
+        # Cualquier otro valor desconocido se trata como fallo para evitar falsos positivos.
+        if status not in ("matched", "delayed"):
             return False, f"Estado inesperado del CLOB: {status!r} — orden no confirmada"
 
         return True, str(resp)
@@ -342,6 +342,19 @@ def process_copy_activity(profile: dict, activity: list):
             log(f"[copy] SKIP duplicado @{profile['username']} | {title[:35]} — ya tenemos posición")
             continue
 
+        # ── Límite de recompras ──────────────────────────────────────────────
+        max_repeats = int(state["copy_settings"].get("max_repeat_buys") or 0)
+        if max_repeats > 0:
+            count_key = f"{addr}:{token_id}"
+            buy_count = state["copy_buy_counts"].get(count_key, 0)
+            if buy_count >= max_repeats:
+                record["status"] = "skipped"
+                record["reason"] = f"límite de recompras alcanzado ({buy_count}/{max_repeats})"
+                log(f"[copy] SKIP (recompras) @{profile['username']} | {title[:35]} "
+                    f"— comprada {buy_count}× (máx {max_repeats})")
+                _insert_copy_trade(record)
+                continue
+
         our_amount, skip_reason = calculate_bet(their_usdc, addr)
         record["our_amount"] = our_amount
 
@@ -410,7 +423,11 @@ def process_copy_activity(profile: dict, activity: list):
                     daemon=True,
                 ).start()
                 record["status"] = "executed"
-                log(f"[copy] BUY @{profile['username']} | {title[:35]} ${our_amount:.2f} ✓")
+                count_key = f"{addr}:{token_id}"
+                state["copy_buy_counts"][count_key] = state["copy_buy_counts"].get(count_key, 0) + 1
+                save_config()
+                log(f"[copy] BUY @{profile['username']} | {title[:35]} ${our_amount:.2f} ✓ "
+                    f"(compra #{state['copy_buy_counts'][count_key]})")
             else:
                 record["status"] = "failed"
                 record["reason"] = msg
