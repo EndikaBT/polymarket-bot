@@ -510,11 +510,15 @@ def api_sell():
     ok, msg   = sell_position(token_id, size_f, ref_price if ref_price > 0 else None,
                               floor_override=floor_override)
     if ok:
-        fill = fetch_fill_price(token_id, sell_ts) or price_f
-        if fill > 0:
-            credit_budget(size_f, fill)
-        record_close(pos.get("title", token_id[:30]), pos.get("outcome", ""),
-                     size_f, pos.get("avg_price") or 0, fill or price_f, "vendida", token_id)
+        # fetch_fill_price bloquea 4-5 s (reintentos con sleep). Lo ejecutamos en
+        # background para responder al cliente de inmediato.
+        def _record(ts, sz, pf):
+            fill = fetch_fill_price(token_id, ts) or pf
+            if fill > 0:
+                credit_budget(sz, fill)
+            record_close(pos.get("title", token_id[:30]), pos.get("outcome", ""),
+                         sz, pos.get("avg_price") or 0, fill or pf, "vendida", token_id)
+        threading.Thread(target=_record, args=(sell_ts, size_f, price_f), daemon=True).start()
     return jsonify({"ok": ok, "error": msg if not ok else ""})
 
 
@@ -543,11 +547,13 @@ def api_sell_adaptive():
     )
 
     if ok:
-        fill = fetch_fill_price(token_id, sell_ts) or price_f
-        if fill > 0:
-            credit_budget(sold, fill)
-        record_close(pos.get("title", token_id[:30]), pos.get("outcome", ""),
-                     sold, pos.get("avg_price") or 0, fill or price_f, "vendida", token_id)
+        def _record_adaptive(ts, sz, pf):
+            fill = fetch_fill_price(token_id, ts) or pf
+            if fill > 0:
+                credit_budget(sz, fill)
+            record_close(pos.get("title", token_id[:30]), pos.get("outcome", ""),
+                         sz, pos.get("avg_price") or 0, fill or pf, "vendida", token_id)
+        threading.Thread(target=_record_adaptive, args=(sell_ts, sold, price_f), daemon=True).start()
 
     return jsonify({
         "ok":        ok,
