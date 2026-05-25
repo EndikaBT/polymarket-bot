@@ -331,6 +331,10 @@
       <span>Historial</span>
       <span class="nav-badge" id="sidebarClosedCount">0</span>
     </a>
+    <a class="nav-item" data-section="apostar">
+      <i class="bi bi-search"></i>
+      <span>Apostar</span>
+    </a>
     <a class="nav-item" data-section="configuracion">
       <i class="bi bi-gear"></i>
       <span>Configuración</span>
@@ -646,6 +650,27 @@
     </div>
   </div>
 
+  <!-- ── SECCIÓN: Apostar ──────────────────────────────────────────────── -->
+  <div id="section-apostar" class="page-section p-3">
+    <div class="card">
+      <div class="card-header d-flex align-items-center gap-2">
+        <i class="bi bi-search text-accent"></i>
+        <span class="fw-semibold">Buscar mercado</span>
+      </div>
+      <div class="card-body">
+        <!-- Search bar -->
+        <div class="input-group mb-3">
+          <input type="text" id="marketSearchInput" class="form-control bg-dark text-light border-secondary"
+            placeholder="Palabra clave o URL de polymarket.com/event/…" />
+          <button class="btn btn-accent" onclick="searchMarkets()">
+            <i class="bi bi-search"></i> Buscar
+          </button>
+        </div>
+        <div id="marketSearchResults"></div>
+      </div>
+    </div>
+  </div>
+
   <!-- ── SECCIÓN: Configuración ─────────────────────────────────────────── -->
   <div id="section-configuracion" class="page-section p-3">
     <!-- Credentials -->
@@ -765,6 +790,25 @@
 <!-- ══════════════════════════════════════════════════════════════════════ -->
 <!--  MODALES                                                               -->
 <!-- ══════════════════════════════════════════════════════════════════════ -->
+
+<!-- Manual buy modal -->
+<div class="modal fade" id="buyModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered modal-sm">
+    <div class="modal-content" style="background:var(--card); border-color:var(--card-border)">
+      <div class="modal-header border-secondary">
+        <h6 class="modal-title"><i class="bi bi-cart-plus-fill text-accent me-2"></i>Comprar</h6>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body" id="buyModalBody"></div>
+      <div class="modal-footer border-secondary">
+        <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+        <button type="button" class="btn btn-sm btn-accent" id="confirmBuyBtn">
+          <i class="bi bi-cart-plus-fill"></i> Comprar
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
 
 <!-- Add Profile -->
 <div class="modal fade" id="addProfileModal" tabindex="-1">
@@ -2127,6 +2171,102 @@ document.getElementById('restartBtn').addEventListener('click', async () => {
       }
     } catch (_) { /* servidor todavía arrancando */ }
   }, 1500);
+});
+
+// ── Buscador de mercados ──────────────────────────────────────────────────
+const buyModal = new bootstrap.Modal(document.getElementById('buyModal'));
+let pendingBuy = null;
+
+async function searchMarkets() {
+  const q = document.getElementById('marketSearchInput').value.trim();
+  if (!q) return;
+  const results = document.getElementById('marketSearchResults');
+  results.innerHTML = '<div class="text-secondary py-3 text-center"><span class="spin">⟳</span> Buscando…</div>';
+  try {
+    const r = await fetch(`/api/market/search?q=${encodeURIComponent(q)}`);
+    const markets = await r.json();
+    if (!markets.length) {
+      results.innerHTML = '<div class="text-secondary py-3 text-center">Sin resultados</div>';
+      return;
+    }
+    results.innerHTML = markets.map(m => `
+      <div class="card mb-2" style="background:var(--card-2)">
+        <div class="card-body py-2 px-3">
+          <div class="fw-semibold text-light mb-2" style="font-size:.88rem">${escHtml(m.title)}</div>
+          <div class="d-flex flex-wrap gap-2">
+            ${m.outcomes.map(o => `
+              <button class="btn btn-sm btn-outline-secondary"
+                onclick="openBuyModal('${escHtml(o.token_id)}','${jsStr(m.title)}','${jsStr(o.name)}',${o.clob_price || o.gamma_price || 0})">
+                <span class="${o.clob_price >= 0.5 ? 'text-success' : 'text-secondary'}">${escHtml(o.name)}</span>
+                <span class="ms-1 text-light">@${o.clob_price > 0 ? o.clob_price.toFixed(3) : (o.gamma_price > 0 ? o.gamma_price.toFixed(3) : '?')}</span>
+              </button>`).join('')}
+          </div>
+          <div class="text-secondary mt-1" style="font-size:.72rem">
+            Vol: $${Number(m.volume||0).toLocaleString('en',{maximumFractionDigits:0})}
+            · Liq: $${Number(m.liquidity||0).toLocaleString('en',{maximumFractionDigits:0})}
+          </div>
+        </div>
+      </div>`).join('');
+  } catch(e) {
+    results.innerHTML = `<div class="text-danger py-2">Error: ${e}</div>`;
+  }
+}
+
+// Enter key triggers search
+document.getElementById('marketSearchInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') searchMarkets();
+});
+
+function openBuyModal(tokenId, title, outcome, price) {
+  pendingBuy = { tokenId, title, outcome, price };
+  document.getElementById('buyModalBody').innerHTML = `
+    <p class="fw-bold text-light mb-1" style="font-size:.88rem">${escHtml(title)}</p>
+    <p class="text-secondary mb-3" style="font-size:.82rem">Resultado: <strong class="text-light">${escHtml(outcome)}</strong> — precio actual: <strong>${price > 0 ? '@'+price.toFixed(3) : '?'}</strong></p>
+    <label class="form-label text-secondary small">Importe (USDC)</label>
+    <div class="input-group input-group-sm">
+      <span class="input-group-text bg-dark text-secondary border-secondary">$</span>
+      <input type="number" id="buyAmountInput" class="form-control bg-dark text-light border-secondary"
+        min="1" step="0.5" value="1" placeholder="mínimo $1" />
+    </div>
+    ${price > 0 ? `<p class="text-secondary mt-2 mb-0" style="font-size:.76rem">Estimado: ~${price > 0 ? (1/price).toFixed(2) : '?'} shares por $1 apostado (comisión 2%)</p>` : ''}`;
+  buyModal.show();
+}
+
+document.getElementById('confirmBuyBtn').addEventListener('click', async () => {
+  if (!pendingBuy) return;
+  const amount = parseFloat(document.getElementById('buyAmountInput')?.value || 0);
+  if (amount < 1) { showToast('Importe mínimo $1', 'error'); return; }
+  const btn = document.getElementById('confirmBuyBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin">⟳</span> Comprando…';
+  try {
+    const r = await fetch('/api/buy', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        token_id:    pendingBuy.tokenId,
+        amount_usdc: amount,
+        title:       pendingBuy.title,
+        outcome:     pendingBuy.outcome,
+      })
+    });
+    const d = await r.json();
+    buyModal.hide();
+    pendingBuy = null;
+    if (d.ok) {
+      showToast(`Compra ejecutada — $${amount} en ${d.outcome || ''}`, 'success');
+      setTimeout(loadPositions, 3000);
+    } else {
+      showToast(`Compra fallida: ${d.error || 'desconocido'}`, 'error');
+    }
+  } catch(err) {
+    buyModal.hide();
+    pendingBuy = null;
+    showToast(`Error de red: ${err}`, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="bi bi-cart-plus-fill"></i> Comprar';
+  }
 });
 
 // ── Init ───────────────────────────────────────────────────────────────────

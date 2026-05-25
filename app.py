@@ -49,11 +49,13 @@ from bot import (
 )
 from copy_bot import (
     copy_trade_loop,
+    execute_copy_trade,
     get_portfolio_value,
     get_user_activity,
     resolve_profile_url,
 )
 from db import (
+    _add_spent,
     _db_conn,
     _db_lock,
     _delete_hidden,
@@ -1064,6 +1066,150 @@ def api_change_password():
 def logout():
     session.clear()
     return redirect(url_for("login"))
+
+
+# ─── Apostar — búsqueda de mercados y compra manual ─────────────────────────
+
+@app.route("/api/market/search", methods=["GET"])
+def market_search():
+    """Busca mercados en Gamma API por palabra clave o URL de polymarket.com."""
+    import json
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    import re
+
+    q = request.args.get("q", "").strip()
+    if not q:
+        return jsonify([])
+
+    try:
+        gamma_markets = []
+
+        if "polymarket.com/event/" in q:
+            # Extraer el slug de la URL
+            m = re.search(r"polymarket\.com/event/([^/?#]+)", q)
+            if not m:
+                return jsonify([])
+            slug = m.group(1)
+            r = requests.get(
+                f"https://gamma-api.polymarket.com/events?slug={slug}&markets=true",
+                timeout=10,
+            )
+            r.raise_for_status()
+            data = r.json()
+            if isinstance(data, list) and data:
+                event = data[0]
+                gamma_markets = event.get("markets", [])
+            elif isinstance(data, dict):
+                gamma_markets = data.get("markets", [])
+        else:
+            r = requests.get(
+                "https://gamma-api.polymarket.com/markets",
+                params={"active": "true", "closed": "false", "search": q, "limit": 12},
+                timeout=10,
+            )
+            r.raise_for_status()
+            gamma_markets = r.json()
+
+        if not isinstance(gamma_markets, list):
+            return jsonify([])
+
+        def _fetch_clob_price(token_id: str) -> float:
+            try:
+                return get_best_bid(token_id) or 0.0
+            except Exception:
+                return 0.0
+
+        results = []
+        for market in gamma_markets:
+            if not isinstance(market, dict):
+                continue
+            if market.get("closed") or not market.get("active", True):
+                continue
+
+            question = market.get("question", "")
+            condition_id = market.get("conditionId", "")
+            volume = market.get("volume", 0)
+            liquidity = market.get("liquidity", 0)
+
+            try:
+                raw_outcomes = market.get("outcomes", "[]")
+                outcomes_names = json.loads(raw_outcomes) if isinstance(raw_outcomes, str) else raw_outcomes
+            except Exception:
+                outcomes_names = []
+
+            try:
+                raw_prices = market.get("outcomePrices", "[]")
+                gamma_prices = json.loads(raw_prices) if isinstance(raw_prices, str) else raw_prices
+            except Exception:
+                gamma_prices = []
+
+            try:
+                raw_token_ids = market.get("clobTokenIds", "[]")
+                token_ids = json.loads(raw_token_ids) if isinstance(raw_token_ids, str) else raw_token_ids
+            except Exception:
+                token_ids = []
+
+            # Fetch CLOB prices in parallel (max 8 workers)
+            clob_prices = {}
+            if token_ids:
+                with ThreadPoolExecutor(max_workers=min(8, len(token_ids))) as ex:
+                    fut_map = {ex.submit(_fetch_clob_price, tid): tid for tid in token_ids}
+                    for fut in as_completed(fut_map):
+                        clob_prices[fut_map[fut]] = fut.result()
+
+            outcomes = []
+            for i, name in enumerate(outcomes_names):
+                tid = token_ids[i] if i < len(token_ids) else ""
+                gp = float(gamma_prices[i]) if i < len(gamma_prices) else 0.0
+                cp = clob_prices.get(tid, 0.0)
+                outcomes.append({
+                    "name": name,
+                    "token_id": tid,
+                    "clob_price": round(cp, 4),
+                    "gamma_price": round(gp, 4),
+                })
+
+            results.append({
+                "title": question,
+                "condition_id": condition_id,
+                "outcomes": outcomes,
+                "volume": volume,
+                "liquidity": liquidity,
+            })
+
+        return jsonify(results)
+
+    except Exception as e:
+        log(f"[market_search] error: {e}")
+        return jsonify([])
+
+
+@app.route("/api/buy", methods=["POST"])
+def manual_buy():
+    """Compra manual de un outcome de mercado."""
+    data = request.get_json(force=True, silent=True) or {}
+    token_id = str(data.get("token_id", "")).strip()
+    title = str(data.get("title", "")).strip()
+    outcome = str(data.get("outcome", "")).strip()
+
+    try:
+        amount_usdc = float(data.get("amount_usdc", 0))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "Importe inválido"})
+
+    if not token_id:
+        return jsonify({"ok": False, "error": "token_id vacío"})
+    if amount_usdc < 1.0:
+        return jsonify({"ok": False, "error": "Importe mínimo $1"})
+
+    success, message = execute_copy_trade(token_id, amount_usdc)
+    if success:
+        _add_spent(amount_usdc)
+        log(f"[manual_buy] OK — {title!r} / {outcome!r} | ${amount_usdc} | token={token_id}")
+        return jsonify({"ok": True, "outcome": outcome, "message": message})
+    else:
+        log(f"[manual_buy] FAIL — {message}")
+        return jsonify({"ok": False, "error": message})
 
 
 # ─── Apagado limpio ───────────────────────────────────────────────────────────
