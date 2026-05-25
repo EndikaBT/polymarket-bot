@@ -1407,12 +1407,29 @@ function sellModalRows(price, cost) {
       <td class="text-end fw-bold" style="color:${netColor}">${netSign}${fmtUsdc(net)}</td></tr>`;
 }
 
-function openSellModal(tokenId, title, size, price, cost, netProfit) {
+function _rebuildSellRows(size, price, cost) {
+  const inp = document.getElementById('sellSizeInput');
+  if (!inp) return;
+  const sellSize = Math.min(parseFloat(inp.value) || size, size);
+  const frac     = cost != null ? sellSize / size : null;
+  const adjCost  = frac != null ? cost * frac : null;
+  const tbl = document.getElementById('sellTable');
+  Array.from(tbl.querySelectorAll('tr.sell-calc-row')).forEach(r => r.remove());
+  const tmp = document.createElement('template');
+  tmp.innerHTML = sellModalRows(price, adjCost);
+  Array.from(tmp.content.querySelectorAll('tr')).forEach(r => {
+    r.classList.add('sell-calc-row');
+    tbl.appendChild(r);
+  });
+}
+
+async function openSellModal(tokenId, title, size, price, cost, netProfit) {
   pendingSell = { tokenId, title, size, price, cost, force: false };
   const confirmBtn = document.getElementById('confirmSellBtn');
   confirmBtn.textContent = 'Vender';
   confirmBtn.className   = 'btn btn-sm btn-danger';
   confirmBtn.disabled    = false;
+
   document.getElementById('sellModalBody').innerHTML = `
     <p class="mb-1">Vas a vender:</p>
     <p class="fw-bold text-light mb-2">${escHtml(title)}</p>
@@ -1426,20 +1443,67 @@ function openSellModal(tokenId, title, size, price, cost, netProfit) {
           <span class="text-secondary ms-1" style="font-size:.75rem">/ ${size}</span>
         </td>
       </tr>
-      ${sellModalRows(price, cost)}
-    </table>`;
-  // Recalcular filas al cambiar la cantidad
-  document.getElementById('sellSizeInput').addEventListener('input', function() {
-    const frac = Math.min(parseFloat(this.value) || 0, size) / size;
-    const adjCost = cost != null ? cost * frac : null;
-    document.getElementById('sellTable').querySelector('tbody, :scope')
-      .querySelectorAll('tr:not(:first-child)').forEach(r => r.remove());
-    const tmp = document.createElement('tbody');
-    tmp.innerHTML = sellModalRows(price, adjCost);
-    Array.from(tmp.querySelectorAll('tr')).forEach(r =>
-      document.getElementById('sellTable').appendChild(r));
-  });
+    </table>
+    <div id="bookDepthInfo" class="mt-2 text-secondary" style="font-size:.78rem">
+      <span class="spin">⟳</span> Consultando liquidez disponible…
+    </div>`;
+
+  document.getElementById('sellSizeInput').addEventListener('input', () =>
+    _rebuildSellRows(size, price, cost));
+  _rebuildSellRows(size, price, cost);
   sellModal.show();
+
+  // Consultar order book en paralelo con la apertura del modal
+  try {
+    const r    = await fetch(`/api/book?token_id=${encodeURIComponent(tokenId)}`);
+    const book = await r.json();
+    const info = document.getElementById('bookDepthInfo');
+    if (!info) return;   // modal ya cerrado
+
+    if (!book.bids || book.bids.length === 0) {
+      info.innerHTML = `<span class="text-danger">⚠ Sin compradores en el libro — FOK no puede ejecutarse. Prueba a Canjear si el mercado está resuelto.</span>`;
+      return;
+    }
+
+    // Calcular cuánto se puede vender al precio actual (floor = best_bid * 0.95)
+    const floor = parseFloat((book.best_bid * 0.95).toFixed(4));
+    let fillable = 0;
+    for (const b of book.bids) {
+      if (b.price >= floor) fillable += b.size;
+    }
+    fillable = Math.min(parseFloat(fillable.toFixed(4)), size);
+
+    // Sugerir la cantidad vendible en el input
+    const inp = document.getElementById('sellSizeInput');
+    if (inp && fillable > 0 && fillable < size) {
+      inp.value = fillable;
+      _rebuildSellRows(size, price, cost);
+    }
+
+    // Construir tabla de profundidad (máx 5 niveles)
+    const levels = book.bids.slice(0, 5).map(b =>
+      `<tr><td>@${b.price.toFixed(4)}</td><td class="text-end">${b.size.toFixed(2)} shares</td></tr>`
+    ).join('');
+    const moreRows = book.bids.length > 5
+      ? `<tr><td colspan="2" class="text-secondary" style="font-size:.72rem">…y ${book.bids.length - 5} niveles más</td></tr>` : '';
+
+    info.innerHTML = `
+      <div class="d-flex align-items-baseline gap-2 mb-1">
+        <span>Liquidez total disponible:</span>
+        <strong class="${fillable >= size ? 'text-success' : 'text-warning'}">${book.total_size.toFixed(2)} shares</strong>
+        ${fillable < size ? `<span class="text-warning">(puedes vender hasta <strong>${fillable.toFixed(2)}</strong> de tus ${size})</span>` : '<span class="text-success">✓ suficiente para vender todo</span>'}
+      </div>
+      <details style="cursor:pointer">
+        <summary class="text-secondary" style="font-size:.72rem">Ver libro de compras (${book.bids.length} niveles)</summary>
+        <table class="table table-sm table-borderless text-secondary mt-1 mb-0" style="font-size:.75rem">
+          <thead><tr><th>Precio</th><th class="text-end">Cantidad</th></tr></thead>
+          <tbody>${levels}${moreRows}</tbody>
+        </table>
+      </details>`;
+  } catch(e) {
+    const info = document.getElementById('bookDepthInfo');
+    if (info) info.innerHTML = `<span class="text-secondary">No se pudo consultar el libro.</span>`;
+  }
 }
 
 function showSlippageWarning(d) {

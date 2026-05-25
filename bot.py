@@ -101,6 +101,43 @@ def fetch_positions() -> list:
     return all_positions
 
 
+def get_order_book_depth(token_id: str) -> dict:
+    """Devuelve la profundidad del lado comprador (bids) para un token.
+
+    Retorna:
+        {
+          "bids": [{"price": float, "size": float}, ...],   # ordenados precio desc
+          "total_size": float,   # suma total de shares disponibles a cualquier precio
+          "best_bid":   float,   # precio del mejor bid
+        }
+    """
+    try:
+        r = requests.get(
+            f"{CLOB_HOST}/book",
+            params={"token_id": token_id},
+            timeout=8,
+        )
+        if r.status_code != 200:
+            return {"bids": [], "total_size": 0.0, "best_bid": 0.0}
+        data = r.json()
+        # El CLOB devuelve {bids: [{price, size}], asks: [...]}
+        # "bids" son los compradores — lo que podemos vender nosotros
+        raw_bids = data.get("bids") or []
+        bids = []
+        for b in raw_bids:
+            p = float(b.get("price", 0))
+            s = float(b.get("size", 0))
+            if p > 0 and s > 0:
+                bids.append({"price": round(p, 4), "size": round(s, 4)})
+        # Ordenar de mayor a menor precio (mejor precio primero)
+        bids.sort(key=lambda x: x["price"], reverse=True)
+        total = round(sum(b["size"] for b in bids), 4)
+        best  = bids[0]["price"] if bids else 0.0
+        return {"bids": bids, "total_size": total, "best_bid": best}
+    except Exception:
+        return {"bids": [], "total_size": 0.0, "best_bid": 0.0}
+
+
 def get_best_bid(token_id: str) -> float:
     if not token_id:
         return 0.0

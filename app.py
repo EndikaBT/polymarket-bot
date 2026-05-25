@@ -41,6 +41,7 @@ from bot import (
     fetch_fill_price,
     fetch_positions,
     get_best_bid,
+    get_order_book_depth,
     init_client,
     redeem_position,
     sell_position,
@@ -456,6 +457,16 @@ def api_redeem():
 
 
 SLIPPAGE_WARN_ROUTE = SLIPPAGE_WARN
+
+
+@app.route("/api/book", methods=["GET"])
+def api_book():
+    """Devuelve la profundidad del libro de compras (bids) para un token_id."""
+    token_id = (request.args.get("token_id") or "").strip()
+    if not token_id:
+        return jsonify({"error": "token_id requerido"}), 400
+    depth = get_order_book_depth(token_id)
+    return jsonify(depth)
 
 
 @app.route("/api/sell", methods=["POST"])
