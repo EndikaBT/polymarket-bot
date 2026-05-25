@@ -475,6 +475,61 @@ def sell_position(token_id: str, size: float, price: float | None = None,
         return False, str(e)
 
 
+# ─── Venta adaptativa ────────────────────────────────────────────────────────
+
+_FOK_LIQUIDITY_PHRASES = (
+    "couldn't be fully filled",
+    "fully filled",
+    "fok",
+    "fill or kill",
+)
+
+def _is_fok_liquidity_error(err: str) -> bool:
+    low = err.lower()
+    return any(p in low for p in _FOK_LIQUIDITY_PHRASES)
+
+
+def sell_position_adaptive(
+    token_id: str,
+    size: float,
+    price: float | None = None,
+    floor_override: float | None = None,
+) -> tuple[bool, float, float, str]:
+    """Intenta vender `size` shares; si el FOK falla por liquidez insuficiente,
+    reintenta automáticamente con fracciones menores del tamaño original.
+
+    Retorna: (success, sold_amount, remaining_amount, message)
+      - success=True si al menos una fracción se vendió.
+      - sold_amount: shares efectivamente vendidas en este intento.
+      - remaining_amount: shares que quedan por vender (= size - sold_amount).
+      - message: descripción del resultado.
+    """
+    fractions = [1.0, 0.75, 0.5, 0.25, 0.1]
+    last_err  = "Sin liquidez a ningún nivel de tamaño"
+
+    for frac in fractions:
+        attempt_size = round(size * frac, 4)
+        if attempt_size < 0.01:
+            break
+
+        log(f"[sell-adaptive] Intentando {attempt_size} shares ({int(frac*100)}% de {size})…")
+        ok, msg = sell_position(token_id, attempt_size, price, floor_override)
+
+        if ok:
+            remaining = round(size - attempt_size, 4)
+            log(f"[sell-adaptive] OK — vendido {attempt_size} shares, quedan {remaining}")
+            return True, attempt_size, remaining, msg
+
+        if _is_fok_liquidity_error(msg):
+            last_err = msg
+            continue  # probar con fracción menor
+
+        # Otro tipo de error (precio, cuenta…) — no tiene sentido seguir reduciendo
+        return False, 0.0, size, msg
+
+    return False, 0.0, size, f"Sin liquidez suficiente incluso al 10% ({last_err[:120]})"
+
+
 # ─── Canje on-chain ───────────────────────────────────────────────────────────
 
 def redeem_position(token_id: str, title: str,

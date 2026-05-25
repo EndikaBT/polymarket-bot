@@ -837,6 +837,10 @@
           title="Ignora el precio de referencia y vende a lo que ofrezca el libro en este momento. Usar si el precio mostrado es incorrecto.">
           <i class="bi bi-lightning-charge-fill me-1"></i>Vender a precio de mercado (sin límite)
         </button>
+        <button type="button" class="btn btn-sm btn-outline-info w-100" id="adaptiveSellBtn"
+          title="Prueba automáticamente con 100%, 75%, 50%, 25% y 10% del tamaño hasta que el libro lo absorba. Útil cuando hay liquidez parcial.">
+          <i class="bi bi-arrow-down-up me-1"></i>Venta adaptativa (ajuste automático)
+        </button>
       </div>
     </div>
   </div>
@@ -1444,66 +1448,16 @@ async function openSellModal(tokenId, title, size, price, cost, netProfit) {
         </td>
       </tr>
     </table>
-    <div id="bookDepthInfo" class="mt-2 text-secondary" style="font-size:.78rem">
-      <span class="spin">⟳</span> Consultando liquidez disponible…
-    </div>`;
+    <p class="text-secondary mt-2 mb-0" style="font-size:.76rem">
+      Si el libro no tiene suficiente liquidez para toda la cantidad, usa
+      <strong class="text-info">Venta adaptativa</strong> — prueba automáticamente
+      con 75%, 50%, 25% y 10% hasta encontrar qué absorbe el mercado.
+    </p>`;
 
   document.getElementById('sellSizeInput').addEventListener('input', () =>
     _rebuildSellRows(size, price, cost));
   _rebuildSellRows(size, price, cost);
   sellModal.show();
-
-  // Consultar order book en paralelo con la apertura del modal
-  try {
-    const r    = await fetch(`/api/book?token_id=${encodeURIComponent(tokenId)}`);
-    const book = await r.json();
-    const info = document.getElementById('bookDepthInfo');
-    if (!info) return;   // modal ya cerrado
-
-    if (!book.bids || book.bids.length === 0) {
-      info.innerHTML = `<span class="text-danger">⚠ Sin compradores en el libro — FOK no puede ejecutarse. Prueba a Canjear si el mercado está resuelto.</span>`;
-      return;
-    }
-
-    // Calcular cuánto se puede vender al precio actual (floor = best_bid * 0.95)
-    const floor = parseFloat((book.best_bid * 0.95).toFixed(4));
-    let fillable = 0;
-    for (const b of book.bids) {
-      if (b.price >= floor) fillable += b.size;
-    }
-    fillable = Math.min(parseFloat(fillable.toFixed(4)), size);
-
-    // Sugerir la cantidad vendible en el input
-    const inp = document.getElementById('sellSizeInput');
-    if (inp && fillable > 0 && fillable < size) {
-      inp.value = fillable;
-      _rebuildSellRows(size, price, cost);
-    }
-
-    // Construir tabla de profundidad (máx 5 niveles)
-    const levels = book.bids.slice(0, 5).map(b =>
-      `<tr><td>@${b.price.toFixed(4)}</td><td class="text-end">${b.size.toFixed(2)} shares</td></tr>`
-    ).join('');
-    const moreRows = book.bids.length > 5
-      ? `<tr><td colspan="2" class="text-secondary" style="font-size:.72rem">…y ${book.bids.length - 5} niveles más</td></tr>` : '';
-
-    info.innerHTML = `
-      <div class="d-flex align-items-baseline gap-2 mb-1">
-        <span>Liquidez total disponible:</span>
-        <strong class="${fillable >= size ? 'text-success' : 'text-warning'}">${book.total_size.toFixed(2)} shares</strong>
-        ${fillable < size ? `<span class="text-warning">(puedes vender hasta <strong>${fillable.toFixed(2)}</strong> de tus ${size})</span>` : '<span class="text-success">✓ suficiente para vender todo</span>'}
-      </div>
-      <details style="cursor:pointer">
-        <summary class="text-secondary" style="font-size:.72rem">Ver libro de compras (${book.bids.length} niveles)</summary>
-        <table class="table table-sm table-borderless text-secondary mt-1 mb-0" style="font-size:.75rem">
-          <thead><tr><th>Precio</th><th class="text-end">Cantidad</th></tr></thead>
-          <tbody>${levels}${moreRows}</tbody>
-        </table>
-      </details>`;
-  } catch(e) {
-    const info = document.getElementById('bookDepthInfo');
-    if (info) info.innerHTML = `<span class="text-secondary">No se pudo consultar el libro.</span>`;
-  }
 }
 
 function showSlippageWarning(d) {
@@ -1626,6 +1580,56 @@ document.getElementById('forceMarketSellBtn').addEventListener('click', async ()
     sellModal.hide();
     pendingSell = null;
     appendLogs([`[manual] Error de red: ${err}`]);
+  }
+});
+
+document.getElementById('adaptiveSellBtn').addEventListener('click', async () => {
+  if (!pendingSell) return;
+  const { tokenId, size: fullSize, price, cost } = pendingSell;
+  const sizeInput = document.getElementById('sellSizeInput');
+  const size = sizeInput ? Math.min(parseFloat(sizeInput.value) || fullSize, fullSize) : fullSize;
+
+  const btn = document.getElementById('adaptiveSellBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin">⟳</span> Probando tamaños…';
+
+  try {
+    const r = await fetch('/api/sell/adaptive', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ token_id: tokenId, size, price, floor: 0 })
+    });
+    const d = await r.json();
+
+    if (d.ok) {
+      if (d.remaining > 0) {
+        // Venta parcial: actualizar el input con el restante y avisar
+        sellModal.hide();
+        pendingSell = null;
+        showToast(`Vendido ${d.sold} shares. Quedan ${d.remaining} — vuelve a abrir el modal para continuar.`, 'warning');
+        setTimeout(loadPositions, 2000);
+      } else {
+        sellModal.hide();
+        pendingSell = null;
+        showToast(`Venta adaptativa completada — ${d.sold} shares vendidos`, 'success');
+        setTimeout(loadPositions, 2000);
+      }
+    } else {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="bi bi-arrow-down-up me-1"></i>Venta adaptativa (ajuste automático)';
+      const body = document.getElementById('sellModalBody');
+      body.querySelectorAll('.alert').forEach(a => a.remove());
+      const alert = document.createElement('div');
+      alert.className = 'alert alert-danger py-2 mt-2 mb-0';
+      alert.style.fontSize = '.82rem';
+      alert.innerHTML = `<strong>Sin liquidez incluso al 10%</strong><br>El libro no tiene compradores activos para ninguna fracción de la posición. Si el mercado está resuelto, intenta <strong>Canjear</strong>.`;
+      body.appendChild(alert);
+      appendLogs([`[manual] Venta adaptativa sin liquidez: ${d.error}`]);
+    }
+  } catch(err) {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="bi bi-arrow-down-up me-1"></i>Venta adaptativa (ajuste automático)';
+    appendLogs([`[manual] Error en venta adaptativa: ${err}`]);
   }
 });
 

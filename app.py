@@ -45,6 +45,7 @@ from bot import (
     init_client,
     redeem_position,
     sell_position,
+    sell_position_adaptive,
 )
 from copy_bot import (
     copy_trade_loop,
@@ -513,6 +514,45 @@ def api_sell():
         record_close(pos.get("title", token_id[:30]), pos.get("outcome", ""),
                      size_f, pos.get("avg_price") or 0, fill or price_f, "vendida", token_id)
     return jsonify({"ok": ok, "error": msg if not ok else ""})
+
+
+@app.route("/api/sell/adaptive", methods=["POST"])
+def api_sell_adaptive():
+    """Venta adaptativa: prueba tamaños decrecientes hasta encontrar qué absorbe el libro."""
+    data     = request.get_json(force=True)
+    token_id = data.get("token_id")
+    size     = data.get("size")
+    price    = data.get("price")
+    floor_raw      = data.get("floor")
+    floor_override = float(floor_raw) if floor_raw is not None else None
+
+    if not token_id or not size:
+        return jsonify({"ok": False, "error": "token_id y size requeridos"})
+
+    size_f  = float(size)
+    price_f = float(price) if price else 0.0
+    fresh   = get_best_bid(token_id)
+    ref_price = fresh if fresh > 0 else None
+
+    pos     = next((p for p in state["positions"] if p["token_id"] == token_id), {})
+    sell_ts = time.time()
+    ok, sold, remaining, msg = sell_position_adaptive(
+        token_id, size_f, ref_price, floor_override=floor_override
+    )
+
+    if ok:
+        fill = fetch_fill_price(token_id, sell_ts) or price_f
+        if fill > 0:
+            credit_budget(sold, fill)
+        record_close(pos.get("title", token_id[:30]), pos.get("outcome", ""),
+                     sold, pos.get("avg_price") or 0, fill or price_f, "vendida", token_id)
+
+    return jsonify({
+        "ok":        ok,
+        "sold":      round(sold, 4),
+        "remaining": round(remaining, 4),
+        "error":     msg if not ok else "",
+    })
 
 
 # ─── Rutas API — Estadísticas ─────────────────────────────────────────────────
