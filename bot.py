@@ -139,6 +139,15 @@ def get_order_book_depth(token_id: str) -> dict:
 
 
 def get_best_bid(token_id: str) -> float:
+    """Devuelve el mejor bid (precio de venta real) del CLOB para un token.
+
+    Solo usa /price?side=SELL — el precio que un comprador pagaría por tus tokens,
+    que es lo que realmente recibirías al vender.
+
+    NO cae al midpoint: el midpoint ((bid+ask)/2) sobreestima el valor real de venta
+    y genera P&L incorrecto. Si no hay bid activo en el libro, devuelve 0.0 y
+    enrich_positions usa el curPrice de la Data API como fallback.
+    """
     if not token_id:
         return 0.0
     try:
@@ -151,9 +160,6 @@ def get_best_bid(token_id: str) -> float:
             price = float(r.json().get("price", 0))
             if price > 0:
                 return price
-        r2 = requests.get(f"{CLOB_HOST}/midpoint", params={"token_id": token_id}, timeout=5)
-        if r2.status_code == 200:
-            return float(r2.json().get("mid", 0))
     except Exception:
         pass
     return 0.0
